@@ -1,0 +1,207 @@
+*git-review.txt*   Review pull requests from Neovim
+
+git-review.nvim is a local-first pull request review plugin for Neovim. It builds
+a quickfix list of changed files plus a location list of hunks for the selected
+file and uses GitHub CLI for review thread actions.
+
+==============================================================================
+CONTENTS                                                        *git-review*
+
+1. Requirements ............................... |git-review-requirements|
+2. Commands ................................... |git-review-commands|
+3. Configuration .............................. |git-review-configuration|
+4. Workflow ................................... |git-review-workflow|
+
+==============================================================================
+1. REQUIREMENTS                                           *git-review-requirements*
+
+- Neovim 0.9+
+- git
+- GitHub CLI (`gh`) with valid authentication
+
+==============================================================================
+2. COMMANDS                                                 *git-review-commands*
+
+                                                    *:GitReview*
+:GitReview {subcommand}
+    Single command dispatcher for all git-review.nvim actions.
+
+    start
+      Start a review session for the current branch. Opens a file picker with
+      changed files, then seeds loclist with hunks for the selected file (using
+      startup-cached hunk data when available). Keeps comments panel closed by
+      default and enables review hunk highlighting in file buffers.
+
+    files
+      Populate the review quickfix list with one entry per changed file.
+      Does not open the quickfix window.
+
+    refresh
+      Refresh active review session state.
+      Recomputes hunks and refreshes review thread panel content.
+
+    panel
+      Toggle the review comments panel for the current buffer path.
+      Panel content is markdown-oriented for thread and reply workflows.
+      Cached comments are rendered immediately and comment refresh runs in the
+      background.
+      Common embedded HTML in comment bodies is normalized to readable markdown-
+      like text (for example links, code, emphasis, block quotes, lists, and
+      breaks). Paragraph tags are normalized to paragraph breaks so nested links
+      render correctly, and HTML comment blocks are folded to
+      `[HTML comment hidden]` placeholders. Thread headings include comment count
+      and resolved status, and comments in the same thread are separated with
+      `> ---` for readability. Resolved thread bodies are collapsed by default.
+      Background refresh shows `GitReview: fetching comments...` notification.
+
+    panel-all
+      Toggle the review comments panel with all review threads.
+
+    toggle-resolved
+      Toggle resolved thread body visibility in the review comments panel.
+
+    toggle-deletion-block
+      Toggle the deleted-lines ghost block nearest the cursor between preview and
+      full modes.
+
+    toggle-deletions
+      Toggle all deleted-lines ghost blocks in the current buffer between preview
+      and full modes.
+
+    expand-deletion-blocks
+      Expand all deleted-lines ghost blocks in the current buffer.
+
+    collapse-deletion-blocks
+      Collapse all deleted-lines ghost blocks in the current buffer.
+
+    info
+      Open the pull request info page for the current branch pull request.
+      Shows PR metadata and description content.
+
+    comment
+      Create a review comment from cursor line or visual line range.
+      Prompts for comment body.
+
+    reply
+      Reply to the currently selected review thread in the panel.
+
+    submit
+      Submit a review. Prompts for APPROVE or REQUEST_CHANGES and an optional
+      message body.
+
+    stop
+      Stop active review mode.
+      Clears active hunk highlights, passive file hunk highlights, deleted-lines
+      ghost highlights, review file quickfix entries, and review hunk loclist
+      entries.
+
+============================================================================== 
+3. CONFIGURATION                                       *git-review-configuration*
+
+                                                *git-review-config-start*
+git-review.nvim supports startup behavior options through |setup()|:
+
+`open_pr_info_on_start` (default: false)
+    Automatically opens `:GitReview info` during `:GitReview start`.
+
+`open_comments_panel_on_start` (default: false)
+    Automatically opens `:GitReview panel` during `:GitReview start`.
+
+`highlights.add` (default: "DiffAdd")
+    Highlight group for added diff lines.
+
+`highlights.change` (default: "DiffChange")
+    Highlight group for changed (non-added) diff lines.
+
+`highlights.delete` (default: "DiffDelete")
+    Highlight group for deleted-lines ghost blocks.
+
+`deletions.enabled` (default: true)
+    Enables deleted-lines ghost block rendering.
+
+`deletions.max_preview_lines` (default: 6)
+    Number of deleted lines shown per block in preview mode.
+
+`deletions.default_expanded` (default: false)
+    Starts deleted-lines ghost blocks in full mode.
+
+`keymaps.enabled` (default: true)
+    Enables built-in default mappings.
+
+`keymaps.prefix` (default: "<leader>gr")
+    Prefix added before each keymap action suffix.
+
+`keymaps.normal`
+    Normal-mode action suffix map. Defaults:
+      start="o", stop="O", submit="s", refresh="r", files="f", panel="p",
+      panel_all="P",
+      info="i", action="c", toggle_resolved="t",
+      toggle_deletion_block="b", toggle_deletions="d"
+    `action` is context-aware: in the comments panel on a selected thread it
+    replies, otherwise it prompts for a new comment.
+    `toggle_deletion_block` (`b`) toggles the nearest deleted-lines block only.
+    `toggle_deletions` (`d`) toggles deleted-lines blocks buffer-wide.
+
+`keymaps.visual`
+    Visual-mode action suffix map. Default: comment="c".
+
+Disable all default keymaps (opt-out):
+>
+  lua require("git-review").setup({ keymaps = { enabled = false } })
+<
+
+Override one action and disable another:
+>
+  lua require("git-review").setup({
+    keymaps = {
+      normal = {
+        action = "a",
+        panel = false,
+      },
+    },
+  })
+<
+
+============================================================================== 
+4. WORKFLOW                                                  *git-review-workflow*
+
+1. Checkout the branch under review.
+2. Run `:GitReview start` and choose a file from the picker.
+3. Navigate hunks with loclist commands like `:lnext` and `:lprev`.
+   Changed lines are highlighted in file buffers using semantic diff groups.
+   Deleted lines render as ghost blocks above anchor lines in preview mode
+   (truncated to `deletions.max_preview_lines`) or full mode.
+4. Optional: Run `:GitReview files` and navigate files with quickfix commands
+   like `:cnext` and `:cprev`.
+5. Optional: Use `:GitReview toggle-deletion-block`,
+   `:GitReview toggle-deletions`, `:GitReview expand-deletion-blocks`, or
+   `:GitReview collapse-deletion-blocks` to switch deleted-line ghost blocks
+   between preview and full rendering.
+6. Add comments with `:GitReview comment`.
+7. Reply to selected threads with `:GitReview reply`.
+8. Optional: submit with `:GitReview submit`.
+9. Run `:GitReview stop` when review is complete.
+
+With default keymaps enabled, git-review.nvim maps these actions using
+`keymaps.prefix` (default: `<leader>gr`):
+
+Normal mode:
+  o  `:GitReview start`                  start review
+  O  `:GitReview stop`                   stop review
+  s  `:GitReview submit`                 submit review
+  r  `:GitReview refresh`                refresh hunks and panel
+  f  `:GitReview files`                  populate files quickfix
+  p  `:GitReview panel`                  open comments panel
+  P  `:GitReview panel-all`              open comments panel (all threads)
+  i  `:GitReview info`                   open PR info page
+  c  context-aware action                reply to selected thread in panel,
+                                         otherwise create comment
+  t  `:GitReview toggle-resolved`        toggle resolved thread body visibility
+  b  local deletion toggle               toggle nearest deleted-lines block
+  d  buffer deletion toggle              toggle all deleted-lines blocks
+
+Visual mode:
+  c  `:GitReview comment`                create comment for selected range
+
+==============================================================================
+vim:tw=78:ts=8:noet:ft=help:norl:
