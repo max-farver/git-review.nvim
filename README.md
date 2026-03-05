@@ -15,12 +15,30 @@ and uses GitHub CLI (`gh`) for thread lookup and comment/reply actions.
 
 Install with your plugin manager, then load it on demand or at startup.
 
-Example (lazy.nvim):
+`lazy.nvim`:
 
 ```lua
 {
   "max-farver/git-review.nvim",
 }
+```
+
+`mini.deps`:
+
+```lua
+local add = MiniDeps.add
+
+add({ source = "max-farver/git-review.nvim" })
+
+require("git-review").setup({})
+```
+
+`vim.pack` (Neovim 0.12+):
+
+```lua
+vim.pack.add({ "https://github.com/max-farver/git-review.nvim" })
+
+require("git-review").setup({})
 ```
 
 The plugin bootstrap auto-registers commands during startup.
