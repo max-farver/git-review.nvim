@@ -26,7 +26,8 @@ M.defaults = {
     prefix = "<leader>gr",
     normal = {
       start = "o",
-      stop = "O",
+      stop = false,
+      range = "O",
       submit = "s",
       refresh = "r",
       files = "f",
@@ -71,6 +72,7 @@ function M.setup(opts)
     keymaps_visual = { keymaps_visual, "table", true },
     keymaps_normal_start = { type(keymaps_normal) == "table" and keymaps_normal.start, is_keymap_action, true },
     keymaps_normal_stop = { type(keymaps_normal) == "table" and keymaps_normal.stop, is_keymap_action, true },
+    keymaps_normal_range = { type(keymaps_normal) == "table" and keymaps_normal.range, is_keymap_action, true },
     keymaps_normal_submit = { type(keymaps_normal) == "table" and keymaps_normal.submit, is_keymap_action, true },
     keymaps_normal_refresh = { type(keymaps_normal) == "table" and keymaps_normal.refresh, is_keymap_action, true },
     keymaps_normal_files = { type(keymaps_normal) == "table" and keymaps_normal.files, is_keymap_action, true },

@@ -1031,7 +1031,8 @@ set["setup exposes default keymap config"] = function()
   assert(cfg.keymaps.enabled == true, "Expected keymaps to be enabled by default")
   assert(cfg.keymaps.prefix == "<leader>gr", "Expected default keymap prefix")
   assert(cfg.keymaps.normal.start == "o", "Expected default normal mode start key")
-  assert(cfg.keymaps.normal.stop == "O", "Expected default normal mode stop key")
+  assert(cfg.keymaps.normal.range == "O", "Expected default normal mode range key")
+  assert(cfg.keymaps.normal.stop == false, "Expected default normal mode stop key to be disabled")
   assert(cfg.keymaps.normal.submit == "s", "Expected default normal mode submit key")
   assert(cfg.keymaps.normal.action == "c", "Expected default normal mode action key")
   assert(cfg.keymaps.normal.panel == "p", "Expected default normal mode panel key")
@@ -1082,7 +1083,7 @@ set["setup keymaps follow active-only lifecycle"] = function()
 
     return {
       start = has_lhs("\\gro", "n"),
-      stop = has_lhs("\\grO", "n"),
+      range = has_lhs("\\grO", "n"),
       submit = has_lhs("\\grs", "n"),
       action = has_lhs("\\grc", "n"),
       panel_all = has_lhs("\\grP", "n"),
@@ -1093,7 +1094,7 @@ set["setup keymaps follow active-only lifecycle"] = function()
   end)()]])
 
   assert(before_start.start == true, "Expected always-on start/toggle mapping")
-  assert(before_start.stop == false, "Expected stop mapping to be inactive before start")
+  assert(before_start.range == true, "Expected range mapping to be active before start")
   assert(before_start.submit == false, "Expected submit mapping to be inactive before start")
   assert(before_start.action == false, "Expected action mapping to be inactive before start")
   assert(before_start.panel_all == false, "Expected panel-all mapping to be inactive before start")
@@ -1120,7 +1121,7 @@ set["setup keymaps follow active-only lifecycle"] = function()
     }
   end)()]])
 
-  assert(after_start.stop == true, "Expected stop mapping to register after start")
+  assert(after_start.stop == false, "Expected stop mapping to remain disabled after start by default")
   assert(after_start.submit == true, "Expected submit mapping to register after start")
   assert(after_start.action == true, "Expected action mapping to register after start")
   assert(after_start.panel_all == true, "Expected panel-all mapping to register after start")
@@ -1138,7 +1139,7 @@ set["setup keymaps follow active-only lifecycle"] = function()
 
     return {
       start = has_lhs("\\gro", "n"),
-      stop = has_lhs("\\grO", "n"),
+      range = has_lhs("\\grO", "n"),
       submit = has_lhs("\\grs", "n"),
       action = has_lhs("\\grc", "n"),
       panel_all = has_lhs("\\grP", "n"),
@@ -1149,13 +1150,68 @@ set["setup keymaps follow active-only lifecycle"] = function()
   end)()]])
 
   assert(after_stop.start == true, "Expected always-on start/toggle mapping to remain")
-  assert(after_stop.stop == false, "Expected stop mapping removed on stop")
+  assert(after_stop.range == true, "Expected range mapping to be restored after stop")
   assert(after_stop.submit == false, "Expected submit mapping removed on stop")
   assert(after_stop.action == false, "Expected action mapping removed on stop")
   assert(after_stop.panel_all == false, "Expected panel-all mapping removed on stop")
   assert(after_stop.toggle_block == false, "Expected toggle block mapping removed on stop")
   assert(after_stop.toggle_all == false, "Expected toggle deletions mapping removed on stop")
   assert(after_stop.visual_comment == false, "Expected visual comment mapping removed on stop")
+end
+
+set["setup keymaps route inactive range and active start-stop toggle"] = function()
+  local state = child.lua_get([=[(function()
+    package.loaded["git-review.config"] = nil
+    package.loaded["git-review.session"] = {
+      is_active = function()
+        return vim.g.git_review_setup_keymaps_active == true
+      end,
+      start = function()
+        vim.g.git_review_setup_keymaps_active = true
+        vim.g.git_review_setup_keymaps_start_calls = (vim.g.git_review_setup_keymaps_start_calls or 0) + 1
+        return { state = "ok" }
+      end,
+      stop = function()
+        vim.g.git_review_setup_keymaps_active = false
+        vim.g.git_review_setup_keymaps_stop_calls = (vim.g.git_review_setup_keymaps_stop_calls or 0) + 1
+        return { state = "ok" }
+      end,
+      start_range_picker = function(_)
+        vim.g.git_review_setup_keymaps_range_calls = (vim.g.git_review_setup_keymaps_range_calls or 0) + 1
+        vim.g.git_review_setup_keymaps_active = true
+        return { hunks = {} }
+      end,
+    }
+
+    require("git-review").setup()
+
+    local range_map_before = vim.fn.maparg("\\grO", "n", false, true)
+    if type(range_map_before) == "table" and type(range_map_before.callback) == "function" then
+      range_map_before.callback()
+    end
+
+    local range_map_after = vim.fn.maparg("\\grO", "n", false, true)
+    local start_map_active = vim.fn.maparg("\\gro", "n", false, true)
+    if type(start_map_active) == "table" and type(start_map_active.callback) == "function" then
+      start_map_active.callback()
+    end
+
+    local range_map_restored = vim.fn.maparg("\\grO", "n", false, true)
+
+    return {
+      range_calls = vim.g.git_review_setup_keymaps_range_calls or 0,
+      stop_calls = vim.g.git_review_setup_keymaps_stop_calls or 0,
+      range_present_before = type(range_map_before) == "table" and range_map_before.lhs == "\\grO",
+      range_present_after = type(range_map_after) == "table" and range_map_after.lhs == "\\grO",
+      range_present_restored = type(range_map_restored) == "table" and range_map_restored.lhs == "\\grO",
+    }
+  end)()]=])
+
+  assert(state.range_present_before == true, "Expected inactive range mapping to exist before activation")
+  assert(state.range_calls == 1, "Expected inactive range mapping to route to range picker")
+  assert(state.range_present_after == false, "Expected range mapping to be removed during active review")
+  assert(state.stop_calls == 1, "Expected start/toggle mapping to stop active review")
+  assert(state.range_present_restored == true, "Expected range mapping to be restored after stop")
 end
 
 set["setup registers active keymaps when start succeeds without state field"] = function()
@@ -1187,10 +1243,9 @@ set["setup registers active keymaps when start succeeds without state field"] = 
   assert(has_active_map == true, "Expected submit keymap to register after successful start")
 end
 
-set["setup restores pre-existing user mapping after active lifecycle"] = function()
+set["setup restores inactive range mapping after active lifecycle"] = function()
   child.lua([=[
     package.loaded["git-review.config"] = nil
-    vim.keymap.set("n", "\\grO", "<cmd>echo 'user-stop'<cr>", { desc = "User stop mapping" })
 
     package.loaded["git-review.session"] = {
       is_active = function()
@@ -1215,17 +1270,15 @@ set["setup restores pre-existing user mapping after active lifecycle"] = functio
     local map = vim.fn.maparg("\\grO", "n", false, true)
     return {
       lhs = type(map) == "table" and map.lhs or nil,
-      rhs = type(map) == "table" and map.rhs or nil,
       desc = type(map) == "table" and map.desc or nil,
     }
   end)()]])
 
-  assert(restored.lhs == "\\grO", "Expected pre-existing stop lhs to be restored after stop")
-  assert(restored.rhs == "<cmd>echo 'user-stop'<cr>", "Expected pre-existing stop rhs to be restored after stop")
-  assert(restored.desc == "User stop mapping", "Expected pre-existing stop desc to be restored after stop")
+  assert(restored.lhs == "\\grO", "Expected inactive range mapping lhs to be restored after stop")
+  assert(restored.desc == "GitReview: start range review", "Expected inactive range mapping desc after stop")
 end
 
-set["setup preserves buffer-local keymap scope after active lifecycle"] = function()
+set["setup range mapping is global after active lifecycle"] = function()
   local restored = child.lua_get([=[(function()
     package.loaded["git-review.config"] = nil
 
@@ -1264,18 +1317,16 @@ set["setup preserves buffer-local keymap scope after active lifecycle"] = functi
 
     return {
       local_lhs = type(local_map) == "table" and local_map.lhs or nil,
-      local_rhs = type(local_map) == "table" and local_map.rhs or nil,
       local_desc = type(local_map) == "table" and local_map.desc or nil,
-      local_buffer = type(local_map) == "table" and local_map.buffer or nil,
       leaked_lhs = type(leaked_map) == "table" and leaked_map.lhs or nil,
+      leaked_desc = type(leaked_map) == "table" and leaked_map.desc or nil,
     }
   end)()]=])
 
-  assert(restored.local_lhs == "\\grO", "Expected buffer-local mapping lhs to remain in original buffer")
-  assert(restored.local_rhs == "<cmd>echo 'buffer-stop'<cr>", "Expected buffer-local mapping rhs to remain in original buffer")
-  assert(restored.local_desc == "Buffer stop mapping", "Expected buffer-local mapping desc to remain in original buffer")
-  assert(restored.local_buffer == 1, "Expected mapping to remain buffer-local")
-  assert(restored.leaked_lhs == nil, "Expected no leaked global mapping in other buffers")
+  assert(restored.local_lhs == "\\grO", "Expected mapping lhs in review buffer")
+  assert(restored.local_desc == "Buffer stop mapping", "Expected buffer-local mapping to remain in review buffer")
+  assert(restored.leaked_lhs == "\\grO", "Expected global range mapping lhs in non-review buffer")
+  assert(restored.leaked_desc == "GitReview: start range review", "Expected global range mapping desc in non-review buffer")
 end
 
 set["setup reconciles active keymaps when session becomes inactive"] = function()
@@ -1504,6 +1555,15 @@ set["setup rejects empty-string keymap action values"] = function()
   assert(result.ok == false, "Expected setup to reject empty-string keymap actions")
   assert(type(result.err) == "string", "Expected setup error message for empty-string keymap action")
   assert(string.find(result.err, "keymaps_normal_action", 1, true), "Expected keymaps_normal_action validation error")
+
+  local range_result = child.lua_get([[(function()
+    local ok, err = pcall(require("git-review").setup, { keymaps = { normal = { range = "" } } })
+    return { ok = ok, err = err }
+  end)()]])
+
+  assert(range_result.ok == false, "Expected setup to reject empty-string range keymap action")
+  assert(type(range_result.err) == "string", "Expected setup error message for empty-string range keymap action")
+  assert(string.find(range_result.err, "keymaps_normal_range", 1, true), "Expected keymaps_normal_range validation error")
 end
 
 set["setup rejects invalid keymap action value types"] = function()
@@ -1517,6 +1577,18 @@ set["setup rejects invalid keymap action value types"] = function()
   assert(number_result.ok == false, "Expected setup to reject numeric keymap action values")
   assert(type(number_result.err) == "string", "Expected setup error message for numeric keymap action")
   assert(string.find(number_result.err, "keymaps_normal_action", 1, true), "Expected keymaps_normal_action validation error")
+
+  local range_number_result = child.lua_get([[(function()
+    local ok, err = pcall(require("git-review").setup, { keymaps = { normal = { range = 1 } } })
+    return { ok = ok, err = err }
+  end)()]])
+
+  assert(range_number_result.ok == false, "Expected setup to reject numeric range keymap action values")
+  assert(type(range_number_result.err) == "string", "Expected setup error message for numeric range keymap action")
+  assert(
+    string.find(range_number_result.err, "keymaps_normal_range", 1, true),
+    "Expected keymaps_normal_range validation error"
+  )
 
   local table_result = child.lua_get([[(function()
     local ok, err = pcall(require("git-review").setup, { keymaps = { visual = { comment = {} } } })

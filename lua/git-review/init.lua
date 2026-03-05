@@ -28,7 +28,9 @@ for _, subcommand in ipairs(ACTIVE_SUBCOMMANDS) do
 end
 
 local ACTIVE_KEYMAPS = {}
+local DEFAULT_KEYMAPS = {}
 local load_session_or_notify
+local register_default_keymaps
 
 local function trim(value)
   return (value:gsub("^%s+", ""):gsub("%s+$", ""))
@@ -268,8 +270,8 @@ local function run_context_aware_action()
   end)
 end
 
-local function unregister_active_keymaps()
-  for _, entry in ipairs(ACTIVE_KEYMAPS) do
+local function unregister_tracked_keymaps(entries)
+  for _, entry in ipairs(entries) do
     pcall(vim.keymap.del, entry.mode, entry.lhs)
     if type(entry.previous) == "table" then
       local rhs = nil
@@ -300,7 +302,44 @@ local function unregister_active_keymaps()
     end
   end
 
-  ACTIVE_KEYMAPS = {}
+  return {}
+end
+
+local function set_tracked_keymap(entries, mode, lhs, rhs, desc)
+  local current_buf = vim.api.nvim_get_current_buf()
+  local previous = vim.fn.maparg(lhs, mode, false, true)
+  if type(previous) ~= "table" or previous.lhs == nil or previous.lhs == "" then
+    local resolved_lhs = vim.api.nvim_replace_termcodes(lhs, true, true, true)
+    previous = vim.fn.maparg(resolved_lhs, mode, false, true)
+  end
+
+  local previous_buffer_local = false
+  if type(previous) ~= "table" or type(previous.lhs) ~= "string" or previous.lhs == "" then
+    previous = nil
+  else
+    previous_buffer_local = previous.buffer == 1
+  end
+
+  vim.keymap.set(mode, lhs, rhs, {
+    silent = true,
+    desc = desc,
+  })
+
+  table.insert(entries, {
+    mode = mode,
+    lhs = lhs,
+    previous = previous,
+    previous_buffer_local = previous_buffer_local,
+    previous_bufnr = previous_buffer_local and current_buf or nil,
+  })
+end
+
+local function unregister_active_keymaps()
+  ACTIVE_KEYMAPS = unregister_tracked_keymaps(ACTIVE_KEYMAPS)
+end
+
+local function unregister_default_keymaps()
+  DEFAULT_KEYMAPS = unregister_tracked_keymaps(DEFAULT_KEYMAPS)
 end
 
 local function session_is_active(session)
@@ -311,6 +350,7 @@ local function reconcile_active_keymaps(session)
   local is_active = session_is_active(session)
   if not is_active and #ACTIVE_KEYMAPS > 0 then
     unregister_active_keymaps()
+    register_default_keymaps()
   end
 
   return is_active
@@ -324,6 +364,7 @@ local function register_active_keymaps()
   end
 
   unregister_active_keymaps()
+  unregister_default_keymaps()
 
   local prefix = type(keymaps.prefix) == "string" and keymaps.prefix or ""
   local normal = type(keymaps.normal) == "table" and keymaps.normal or {}
@@ -335,34 +376,22 @@ local function register_active_keymaps()
     end
 
     local lhs = prefix .. suffix
-    local current_buf = vim.api.nvim_get_current_buf()
-    local previous = vim.fn.maparg(lhs, mode, false, true)
-    if type(previous) ~= "table" or previous.lhs == nil or previous.lhs == "" then
-      local resolved_lhs = vim.api.nvim_replace_termcodes(lhs, true, true, true)
-      previous = vim.fn.maparg(resolved_lhs, mode, false, true)
-    end
-
-    local previous_buffer_local = false
-    if type(previous) ~= "table" or type(previous.lhs) ~= "string" or previous.lhs == "" then
-      previous = nil
-    else
-      previous_buffer_local = previous.buffer == 1
-    end
-
-    vim.keymap.set(mode, lhs, rhs, {
-      silent = true,
-      desc = desc,
-    })
-
-    table.insert(ACTIVE_KEYMAPS, {
-      mode = mode,
-      lhs = lhs,
-      previous = previous,
-      previous_buffer_local = previous_buffer_local,
-      previous_bufnr = previous_buffer_local and current_buf or nil,
-    })
+    set_tracked_keymap(ACTIVE_KEYMAPS, mode, lhs, rhs, desc)
   end
 
+  map_active_if_enabled("n", normal.start, function()
+    local session = load_session_or_notify("toggle")
+    if session == nil then
+      return
+    end
+
+    if session_is_active(session) then
+      vim.cmd("GitReview stop")
+      return
+    end
+
+    vim.cmd("GitReview start")
+  end, "GitReview: start/stop review")
   map_active_if_enabled("n", normal.stop, "<cmd>GitReview stop<cr>", "GitReview: stop review")
   map_active_if_enabled("n", normal.submit, "<cmd>GitReview submit<cr>", "GitReview: submit review")
   map_active_if_enabled("n", normal.refresh, "<cmd>GitReview refresh<cr>", "GitReview: refresh")
@@ -386,37 +415,51 @@ local function register_active_keymaps()
   map_active_if_enabled("x", visual.comment, run_visual_comment_action, "GitReview: comment range")
 end
 
-local function register_default_keymaps()
+register_default_keymaps = function()
   local cfg = require("git-review.config").get()
   local keymaps = type(cfg) == "table" and cfg.keymaps or nil
   if type(keymaps) ~= "table" or keymaps.enabled ~= true then
     return
   end
 
+  unregister_default_keymaps()
+
   local prefix = type(keymaps.prefix) == "string" and keymaps.prefix or ""
   local normal = type(keymaps.normal) == "table" and keymaps.normal or {}
   local start_suffix = normal.start
-  if start_suffix == nil or start_suffix == false then
-    return
+  local range_suffix = normal.range
+
+  if not (start_suffix == nil or start_suffix == false) then
+    set_tracked_keymap(DEFAULT_KEYMAPS, "n", prefix .. start_suffix, function()
+      local session = load_session_or_notify("toggle")
+      if session == nil then
+        return
+      end
+
+      local is_active = session_is_active(session)
+      if is_active then
+        vim.cmd("GitReview stop")
+        return
+      end
+
+      vim.cmd("GitReview start")
+    end, "GitReview: start/stop review")
   end
 
-  vim.keymap.set("n", prefix .. start_suffix, function()
-    local session = load_session_or_notify("toggle")
-    if session == nil then
-      return
-    end
+  if not (range_suffix == nil or range_suffix == false) then
+    set_tracked_keymap(DEFAULT_KEYMAPS, "n", prefix .. range_suffix, function()
+      local session = load_session_or_notify("range")
+      if session == nil then
+        return
+      end
 
-    local is_active = session_is_active(session)
-    if is_active then
-      vim.cmd("GitReview stop")
-      return
-    end
+      if session_is_active(session) then
+        return
+      end
 
-    vim.cmd("GitReview start")
-  end, {
-    silent = true,
-    desc = "GitReview: start/stop review",
-  })
+      vim.cmd("GitReview range")
+    end, "GitReview: start range review")
+  end
 end
 
 local function run_start_action()
@@ -624,6 +667,7 @@ local function run_dispatcher(command_opts)
     end)
     if success then
       unregister_active_keymaps()
+      register_default_keymaps()
     end
     return
   end

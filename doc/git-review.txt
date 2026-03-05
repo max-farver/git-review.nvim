@@ -141,7 +141,7 @@ git-review.nvim supports startup behavior options through |setup()|:
 
 `keymaps.normal`
     Normal-mode action suffix map. Defaults:
-      start="o", stop="O", submit="s", refresh="r", files="f", panel="p",
+      start="o", stop=false, range="O", submit="s", refresh="r", files="f", panel="p",
       panel_all="P",
       info="i", action="c", toggle_resolved="t",
       toggle_deletion_block="b", toggle_deletions="d"
@@ -200,8 +200,10 @@ With default keymaps enabled, git-review.nvim maps these actions using
 `keymaps.prefix` (default: `<leader>gr`):
 
 Normal mode:
-  o  `:GitReview start`                  start review
-  O  `:GitReview stop`                   stop review
+  o  start/stop toggle                   `:GitReview start` when inactive,
+                                         `:GitReview stop` when active
+  O  `:GitReview range`                  start range review when inactive;
+                                         mapping is removed while active
   s  `:GitReview submit`                 submit review
   r  `:GitReview refresh`                refresh hunks and panel
   f  `:GitReview files`                  populate files quickfix

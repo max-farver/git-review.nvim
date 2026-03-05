@@ -103,8 +103,8 @@ Default keybinds (`keymaps.enabled = true`) use the prefix `<leader>gr`:
 
 | Mode | Key | Action |
 | --- | --- | --- |
-| Normal | `o` | `:GitReview start` |
-| Normal | `O` | `:GitReview stop` |
+| Normal | `o` | Toggle review start/stop (`:GitReview start` when inactive, `:GitReview stop` when active) |
+| Normal | `O` | `:GitReview range` (inactive only; mapping is removed while review is active) |
 | Normal | `s` | `:GitReview submit` |
 | Normal | `r` | `:GitReview refresh` |
 | Normal | `f` | `:GitReview files` |
@@ -132,7 +132,7 @@ Default keybinds (`keymaps.enabled = true`) use the prefix `<leader>gr`:
 - `keymaps.enabled` (default: `true`) - register built-in keymaps.
 - `keymaps.prefix` (default: `"<leader>gr"`) - prefix prepended to each action suffix.
 - `keymaps.normal` action suffixes (defaults):
-  - `start = "o"`, `stop = "O"`, `submit = "s"`, `refresh = "r"`, `files = "f"`, `panel = "p"`, `panel_all = "P"`, `info = "i"`
+  - `start = "o"`, `stop = false`, `range = "O"`, `submit = "s"`, `refresh = "r"`, `files = "f"`, `panel = "p"`, `panel_all = "P"`, `info = "i"`
   - `action = "c"` (context-aware: reply in panel on selected thread, comment otherwise)
   - `toggle_resolved = "t"`, `toggle_deletion_block = "b"` (nearest block), `toggle_deletions = "d"` (buffer-wide toggle)
 - `keymaps.visual` action suffixes (defaults):
@@ -159,7 +159,8 @@ require("git-review").setup({
     prefix = "<leader>gr",
     normal = {
       start = "o",
-      stop = "O",
+      stop = false,
+      range = "O",
       submit = "s",
       refresh = "r",
       files = "f",
