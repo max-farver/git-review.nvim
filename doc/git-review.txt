@@ -32,6 +32,14 @@ CONTENTS                                                        *git-review*
       startup-cached hunk data when available). Keeps comments panel closed by
       default and enables review hunk highlighting in file buffers.
 
+    range
+      Start a read-only commit-range session.
+      Like `:GitReview start`, this is available when review mode is inactive.
+      `:GitReview range` opens a two-step picker (end commit first, then start)
+      and reviews `start...end`.
+      `:GitReview range {start} {end}` starts the same range directly.
+      In range mode, mutating actions (comment/reply/submit) are rejected.
+
     files
       Populate the review quickfix list with one entry per changed file.
       Does not open the quickfix window.
@@ -145,6 +153,9 @@ git-review.nvim supports startup behavior options through |setup()|:
 `keymaps.visual`
     Visual-mode action suffix map. Default: comment="c".
 
+Range-mode sessions are read-only regardless of keymaps. `:GitReview comment`,
+`:GitReview reply`, and `:GitReview submit` are rejected in range mode.
+
 Disable all default keymaps (opt-out):
 >
   lua require("git-review").setup({ keymaps = { enabled = false } })
@@ -166,7 +177,9 @@ Override one action and disable another:
 4. WORKFLOW                                                  *git-review-workflow*
 
 1. Checkout the branch under review.
-2. Run `:GitReview start` and choose a file from the picker.
+2. Run `:GitReview start` and choose a file from the picker, or run
+   `:GitReview range` (picker) / `:GitReview range {start} {end}` for commit-
+   range review.
 3. Navigate hunks with loclist commands like `:lnext` and `:lprev`.
    Changed lines are highlighted in file buffers using semantic diff groups.
    Deleted lines render as ghost blocks above anchor lines in preview mode
@@ -180,6 +193,7 @@ Override one action and disable another:
 6. Add comments with `:GitReview comment`.
 7. Reply to selected threads with `:GitReview reply`.
 8. Optional: submit with `:GitReview submit`.
+   (Range mode is read-only: steps 6-8 are unavailable there.)
 9. Run `:GitReview stop` when review is complete.
 
 With default keymaps enabled, git-review.nvim maps these actions using

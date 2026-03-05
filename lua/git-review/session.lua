@@ -980,6 +980,105 @@ local function resolve_head_commit(run_command)
   return commit_id
 end
 
+local function validate_commit_ref(run_command, ref, label)
+  local guidance = "Verify ref with: git rev-parse --verify " .. ref .. "^{commit}"
+  local raw_result = run_command({ "git", "rev-parse", "--verify", ref .. "^{commit}" })
+  local result, result_error = normalize_run_result(raw_result)
+  if not result then
+    return nil, "Unable to validate " .. label .. " ref '" .. ref .. "': " .. result_error .. ". " .. guidance
+  end
+
+  if result.code ~= 0 then
+    local detail = result.stderr ~= "" and trim(result.stderr) or "invalid ref"
+    return nil, "Unable to validate " .. label .. " ref '" .. ref .. "': " .. detail .. ". " .. guidance
+  end
+
+  local commit_id = trim(result.stdout)
+  if commit_id == "" then
+    return nil, "Unable to validate " .. label .. " ref '" .. ref .. "': empty commit id. " .. guidance
+  end
+
+  return commit_id
+end
+
+local function remove_owned_worktree(session, opts)
+  if type(session) ~= "table" or session.worktree_owned ~= true then
+    return true
+  end
+
+  local worktree_path = session.worktree_path
+  if type(worktree_path) ~= "string" or worktree_path == "" then
+    return true
+  end
+
+  opts = opts or {}
+  local run_command = opts.run_command or session.run_command or require("git-review.system").run
+  local command = { "git", "worktree", "remove", "--force", worktree_path }
+  local ok_call, raw_result = pcall(run_command, command)
+  if not ok_call then
+    return false,
+      "Unable to remove owned worktree '"
+        .. worktree_path
+        .. "': "
+        .. tostring(raw_result)
+        .. ". Run 'git worktree remove --force "
+        .. worktree_path
+        .. "' manually."
+  end
+
+  local result, result_error = normalize_run_result(raw_result)
+  if not result then
+    return false,
+      "Unable to remove owned worktree '"
+        .. worktree_path
+        .. "': "
+        .. tostring(result_error)
+        .. ". Run 'git worktree remove --force "
+        .. worktree_path
+        .. "' manually."
+  end
+
+  if result.code ~= 0 then
+    local detail = result.stderr ~= "" and trim(result.stderr) or "git worktree remove failed"
+    return false,
+      "Unable to remove owned worktree '"
+        .. worktree_path
+        .. "': "
+        .. detail
+        .. ". Run 'git worktree remove --force "
+        .. worktree_path
+        .. "' manually."
+  end
+
+  return true
+end
+
+local function should_cleanup_previous_owned_worktree(previous_session, next_opts)
+  if type(previous_session) ~= "table" or previous_session.worktree_owned ~= true then
+    return false
+  end
+
+  local previous_worktree_path = previous_session.worktree_path
+  if type(previous_worktree_path) ~= "string" or previous_worktree_path == "" then
+    return false
+  end
+
+  if type(next_opts) ~= "table" then
+    return true
+  end
+
+  if next_opts.worktree_owned ~= true then
+    return true
+  end
+
+  local next_worktree_path = next_opts.worktree_path
+  if type(next_worktree_path) ~= "string" or next_worktree_path == "" then
+    return true
+  end
+
+  return not paths_match(previous_worktree_path, next_worktree_path)
+end
+
 local function resolve_context_path_from_buffer(opts)
   local bufnr = opts.bufnr or 0
   local buffer_name = vim.api.nvim_buf_get_name(bufnr)
@@ -1256,11 +1355,31 @@ local function open_review_quickfix_preserving_focus()
   end
 end
 
+local function range_mode_unsupported(action_name)
+  if type(current_session) == "table" and current_session.mode == "range" then
+    return {
+      state = "unsupported_in_range_mode",
+      message = action_name .. " is unsupported in range mode",
+    }
+  end
+
+  return nil
+end
+
 function M.start(opts)
   opts = opts or {}
   vim.validate({
     opts = { opts, "table" },
   })
+
+  local previous_session = current_session
+  local should_cleanup_previous = should_cleanup_previous_owned_worktree(previous_session, opts)
+  if should_cleanup_previous then
+    local _, cleanup_error = remove_owned_worktree(previous_session)
+    if cleanup_error ~= nil then
+      error(cleanup_error)
+    end
+  end
 
   current_session = nil
   local review_source_winid = vim.api.nvim_get_current_win()
@@ -1351,6 +1470,13 @@ function M.start(opts)
     panel_current_path = nil,
     threads_fetch_in_flight = false,
     threads = {},
+    mode = opts.mode,
+    range_start = opts.range_start,
+    range_end = opts.range_end,
+    review_commit_id = opts.review_commit_id,
+    review_repo_root = opts.review_repo_root,
+    worktree_path = opts.worktree_path,
+    worktree_owned = opts.worktree_owned == true,
   }
 
   local hunks = parse_diff(result.stdout, {
@@ -1578,6 +1704,252 @@ function M.start(opts)
   }
 end
 
+function M.start_range(opts)
+  opts = opts or {}
+  vim.validate({
+    opts = { opts, "table" },
+    start_ref = { opts.start_ref, "string" },
+    end_ref = { opts.end_ref, "string" },
+  })
+
+  local run_command = opts.run_command or require("git-review.system").run
+  local review_repo_root = resolve_repo_root(run_command, opts.cwd or vim.loop.cwd())
+
+  local _, start_ref_error = validate_commit_ref(run_command, opts.start_ref, "start")
+  if start_ref_error ~= nil then
+    return {
+      state = "command_error",
+      message = start_ref_error,
+    }
+  end
+
+  local _, end_ref_error = validate_commit_ref(run_command, opts.end_ref, "end")
+  if end_ref_error ~= nil then
+    return {
+      state = "command_error",
+      message = end_ref_error,
+    }
+  end
+
+  local worktree_path = vim.fn.tempname()
+  local raw_worktree_result = run_command({ "git", "worktree", "add", "--detach", worktree_path, opts.end_ref })
+  local worktree_result, worktree_error = normalize_run_result(raw_worktree_result)
+  if not worktree_result then
+    return {
+      state = "command_error",
+      message = "Unable to create range worktree: " .. worktree_error,
+    }
+  end
+
+  if worktree_result.code ~= 0 then
+    local detail = worktree_result.stderr ~= "" and trim(worktree_result.stderr) or "git worktree add failed"
+    return {
+      state = "command_error",
+      message = "Unable to create range worktree: " .. detail,
+    }
+  end
+
+  local range_opts = vim.deepcopy(opts)
+  range_opts.diff_command = { "git", "-C", worktree_path, "diff", "--no-color", opts.start_ref .. "..." .. opts.end_ref }
+  range_opts.cwd = worktree_path
+  range_opts.repo_root = worktree_path
+  range_opts.mode = "range"
+  range_opts.range_start = opts.start_ref
+  range_opts.range_end = opts.end_ref
+  range_opts.review_commit_id = opts.end_ref
+  range_opts.review_repo_root = review_repo_root
+  range_opts.worktree_path = worktree_path
+  range_opts.worktree_owned = true
+  range_opts.start_ref = nil
+  range_opts.end_ref = nil
+
+  local ok_start, start_result = pcall(M.start, range_opts)
+  if ok_start
+    and type(start_result) == "table"
+    and (type(start_result.state) ~= "string" or start_result.state == "ok")
+  then
+    return start_result
+  end
+
+  local start_error = nil
+  if not ok_start then
+    start_error = tostring(start_result)
+  elseif type(start_result) == "table" then
+    start_error = start_result.message or ("Range start failed (state: " .. tostring(start_result.state) .. ")")
+  else
+    start_error = "Range start returned invalid state"
+  end
+
+  local _, cleanup_error = remove_owned_worktree(range_opts, {
+    run_command = run_command,
+  })
+  if cleanup_error ~= nil then
+    start_error = start_error .. " Cleanup failed: " .. cleanup_error
+  end
+
+  return {
+    state = "command_error",
+    message = "Unable to start range review: " .. start_error,
+  }
+end
+
+function M.start_range_picker(opts)
+  opts = opts or {}
+  vim.validate({
+    opts = { opts, "table" },
+  })
+
+  local run_command = opts.run_command or require("git-review.system").run
+
+  local function list_range_picker_commits(ref)
+    local raw_result = run_command({ "git", "log", "--format=%H%x09%s", ref })
+    local result, result_error = normalize_run_result(raw_result)
+    if not result then
+      return nil, "Unable to load commits for range picker: " .. result_error
+    end
+
+    if result.code ~= 0 then
+      local detail = result.stderr ~= "" and result.stderr or "git log failed"
+      return nil, "Unable to load commits for range picker: " .. detail
+    end
+
+    local commits = {}
+    for line in string.gmatch(result.stdout, "[^\r\n]+") do
+      local sha, subject = line:match("^([^%s]+)%s+(.+)$")
+      if type(sha) == "string" and sha ~= "" then
+        table.insert(commits, {
+          sha = sha,
+          short_sha = sha:sub(1, 7),
+          subject = type(subject) == "string" and subject or "",
+        })
+      end
+    end
+
+    if #commits == 0 then
+      return nil, "Unable to load commits for range picker: no commits found for " .. ref
+    end
+
+    return commits
+  end
+
+  local function pick_commit(commits, prompt, default_index, on_choice)
+    if type(vim.ui) ~= "table" or type(vim.ui.select) ~= "function" then
+      on_choice(nil, {
+        state = "context_error",
+        message = "Commit picker UI is unavailable",
+      })
+      return
+    end
+
+    local choices = {}
+    for _, commit in ipairs(commits) do
+      table.insert(choices, {
+        sha = commit.sha,
+        short_sha = commit.short_sha,
+        subject = commit.subject,
+        label = commit.short_sha .. " " .. commit.subject,
+      })
+    end
+
+    local ok_select, select_err = pcall(vim.ui.select, choices, {
+      prompt = prompt,
+      default = default_index,
+      format_item = function(choice)
+        if type(choice) == "table" and type(choice.label) == "string" then
+          return choice.label
+        end
+
+        return tostring(choice)
+      end,
+    }, function(choice)
+      if choice == nil then
+        on_choice(nil, {
+          state = "cancelled",
+          message = "Commit range picker cancelled",
+        })
+        return
+      end
+
+      on_choice(choice)
+    end)
+
+    if not ok_select then
+      on_choice(nil, {
+        state = "command_error",
+        message = "Commit picker failed: " .. tostring(select_err),
+      })
+    end
+  end
+
+  local on_complete = type(opts.on_complete) == "function" and opts.on_complete or nil
+  local completed = false
+  local completed_result = nil
+  local function finish(result)
+    if completed then
+      return
+    end
+
+    completed = true
+    completed_result = result
+    if on_complete ~= nil then
+      on_complete(result)
+    end
+  end
+
+  local end_commits, end_error = list_range_picker_commits("HEAD")
+  if type(end_commits) ~= "table" then
+    return finish({
+      state = "command_error",
+      message = end_error,
+    })
+  end
+
+  pick_commit(end_commits, "Select range end", 1, function(selected_end, end_pick_error)
+    if selected_end == nil then
+      finish(end_pick_error)
+      return
+    end
+
+    local start_commits, start_error = list_range_picker_commits(selected_end.sha)
+    if type(start_commits) ~= "table" then
+      finish({
+        state = "command_error",
+        message = start_error,
+      })
+      return
+    end
+
+    local start_default = start_commits[2] and 2 or 1
+    pick_commit(start_commits, "Select range start", start_default, function(selected_start, start_pick_error)
+      if selected_start == nil then
+        finish(start_pick_error)
+        return
+      end
+
+      local range_opts = vim.deepcopy(opts)
+      range_opts.start_ref = selected_start.sha
+      range_opts.end_ref = selected_end.sha
+      range_opts.on_complete = nil
+
+      finish(M.start_range(range_opts))
+    end)
+  end)
+
+  if on_complete ~= nil then
+    return {
+      state = "pending",
+    }
+  end
+
+  if completed then
+    return completed_result
+  end
+
+  return {
+    state = "pending",
+  }
+end
+
 function M.populate_files_quickfix()
   if current_session == nil then
     return {
@@ -1634,6 +2006,13 @@ function M.refresh(opts)
       diff_command = current_session.diff_command,
       cwd = current_session.cwd,
       repo = current_session.repo,
+      mode = current_session.mode,
+      range_start = current_session.range_start,
+      range_end = current_session.range_end,
+      review_commit_id = current_session.review_commit_id,
+      review_repo_root = current_session.review_repo_root,
+      worktree_path = current_session.worktree_path,
+      worktree_owned = current_session.worktree_owned,
     }
   end
 
@@ -1671,6 +2050,8 @@ function M.stop(opts)
   vim.validate({
     opts = { opts, "table" },
   })
+
+  local session_to_stop = current_session
 
   local hunk_highlight = opts.hunk_highlight
   if hunk_highlight == nil and current_session ~= nil then
@@ -1715,8 +2096,8 @@ function M.stop(opts)
   })
 
   local loclist_winid = 0
-  if current_session ~= nil then
-    local review_source_winid = current_session.review_source_winid
+  if session_to_stop ~= nil then
+    local review_source_winid = session_to_stop.review_source_winid
     if type(review_source_winid) == "number" and review_source_winid > 0 and vim.api.nvim_win_is_valid(review_source_winid) then
       loclist_winid = review_source_winid
     end
@@ -1731,7 +2112,18 @@ function M.stop(opts)
     pcall(vim.api.nvim_clear_autocmds, { group = thread_refresh_group })
   end
 
+  local _, cleanup_error = remove_owned_worktree(session_to_stop, {
+    run_command = opts.run_command,
+  })
+
   current_session = nil
+
+  if cleanup_error ~= nil then
+    return {
+      state = "command_error",
+      message = cleanup_error,
+    }
+  end
 
   return {
     state = "ok",
@@ -2091,6 +2483,11 @@ function M.submit_review(opts)
     opts = { opts, "table" },
   })
 
+  local range_mode_state = range_mode_unsupported("submit_review")
+  if range_mode_state ~= nil then
+    return range_mode_state
+  end
+
   if opts.body ~= nil and type(opts.body) ~= "string" then
     error("body must be a string when provided")
   end
@@ -2156,6 +2553,11 @@ end
 
 function M.create_comment(opts)
   opts = opts or {}
+  local range_mode_state = range_mode_unsupported("create_comment")
+  if range_mode_state ~= nil then
+    return range_mode_state
+  end
+
   vim.validate({
     opts = { opts, "table" },
     body = { opts.body, "string" },
@@ -2263,6 +2665,11 @@ function M.reply_to_selected_thread(opts)
   vim.validate({
     opts = { opts, "table" },
   })
+
+  local range_mode_state = range_mode_unsupported("reply_to_selected_thread")
+  if range_mode_state ~= nil then
+    return range_mode_state
+  end
 
   local panel = opts.panel or require("git-review.ui.panel")
   local has_explicit_selection_context = opts.cursor_line ~= nil or opts.bufnr ~= nil

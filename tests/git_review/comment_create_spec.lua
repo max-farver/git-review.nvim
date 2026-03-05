@@ -308,4 +308,262 @@ index 1111111..2222222 100644
   assert(payload.position == 2, "Expected mapped line position")
 end
 
+set["session.create_comment is blocked in range mode"] = function()
+  child.lua([=[
+    local session = require("git-review.session")
+
+    session.start_range({
+      start_ref = "base/head",
+      end_ref = "feature/head",
+      run_command = function(command)
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "rev-parse"
+          and command[3] == "--show-toplevel"
+        then
+          return {
+            code = 0,
+            stdout = vim.fn.getcwd() .. "\n",
+            stderr = "",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "rev-parse"
+          and command[3] == "--verify"
+          and (command[4] == "base/head^{commit}" or command[4] == "feature/head^{commit}")
+        then
+          return {
+            code = 0,
+            stdout = "validated\n",
+            stderr = "",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "worktree"
+          and command[3] == "add"
+          and command[4] == "--detach"
+          and type(command[5]) == "string"
+          and command[6] == "feature/head"
+        then
+          return {
+            code = 0,
+            stdout = "",
+            stderr = "",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "-C"
+          and type(command[3]) == "string"
+          and command[4] == "diff"
+          and command[5] == "--no-color"
+          and command[6] == "base/head...feature/head"
+        then
+          return {
+            code = 0,
+            stdout = "",
+            stderr = "",
+          }
+        end
+
+        return {
+          code = 1,
+          stdout = "",
+          stderr = "unexpected command",
+        }
+      end,
+      parse_diff = function(_)
+        return {}
+      end,
+      fetch_review_threads = function(_)
+        return {
+          state = "ok",
+          threads = {},
+        }
+      end,
+      panel = {
+        render = function(_) end,
+      },
+      repo_root = vim.fs.normalize(vim.fn.getcwd()),
+      repo = "acme/repo",
+      commit_id = "head-commit",
+      defer_thread_refresh = true,
+    })
+
+    vim.g.git_review_range_create_comment_result = session.create_comment({
+      body = "range mode blocked",
+      context = {
+        path = "README.md",
+        start_line = 1,
+        end_line = 1,
+      },
+      diff_text = "diff --git a/README.md b/README.md",
+      repo = "acme/repo",
+      pr_number = 42,
+      commit_id = "abc123",
+      create_review_comment = function(_)
+        return {
+          state = "ok",
+        }
+      end,
+    })
+  ]=])
+
+  local result = child.lua_get([[vim.g.git_review_range_create_comment_result]])
+
+  assert(type(result) == "table", "Expected create_comment range-mode result table")
+  assert(result.state == "unsupported_in_range_mode", "Expected range mode to block create_comment")
+  assert(result.message == "create_comment is unsupported in range mode", "Expected deterministic range mode message")
+end
+
+set["session.create_comment remains blocked in range mode after refresh"] = function()
+  child.lua([=[
+    local session = require("git-review.session")
+    local calls = 0
+
+    session.start_range({
+      start_ref = "base/head",
+      end_ref = "feature/head",
+      run_command = function(command)
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "rev-parse"
+          and command[3] == "--show-toplevel"
+        then
+          return {
+            code = 0,
+            stdout = vim.fn.getcwd() .. "\n",
+            stderr = "",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "rev-parse"
+          and command[3] == "--verify"
+          and (command[4] == "base/head^{commit}" or command[4] == "feature/head^{commit}")
+        then
+          return {
+            code = 0,
+            stdout = "validated\n",
+            stderr = "",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "-C"
+          and type(command[3]) == "string"
+          and command[4] == "diff"
+          and command[5] == "--no-color"
+          and command[6] == "base/head...feature/head"
+        then
+          return {
+            code = 0,
+            stdout = "",
+            stderr = "",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "worktree"
+          and command[3] == "add"
+          and command[4] == "--detach"
+          and type(command[5]) == "string"
+          and command[6] == "feature/head"
+        then
+          return {
+            code = 0,
+            stdout = "",
+            stderr = "",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "rev-parse"
+          and command[3] == "--abbrev-ref"
+          and command[4] == "HEAD"
+        then
+          return {
+            code = 0,
+            stdout = "feature/range\n",
+            stderr = "",
+          }
+        end
+
+        return {
+          code = 1,
+          stdout = "",
+          stderr = "unexpected command",
+        }
+      end,
+      resolve_branch = function(_)
+        return "feature/range"
+      end,
+      resolve_pr_for_branch = function(_, _)
+        return {
+          state = "single_pr",
+          pr = {
+            number = 42,
+            baseRefName = "main",
+          },
+        }
+      end,
+      parse_diff = function(_)
+        return {}
+      end,
+      fetch_review_threads = function(_)
+        return {
+          state = "ok",
+          threads = {},
+        }
+      end,
+      panel = {
+        render = function(_) end,
+      },
+      repo_root = vim.fs.normalize(vim.fn.getcwd()),
+      repo = "acme/repo",
+      commit_id = "head-commit",
+      defer_thread_refresh = true,
+    })
+
+    session.refresh()
+
+    vim.g.git_review_range_create_comment_refresh_result = session.create_comment({
+      body = "range mode blocked",
+      context = {
+        path = "README.md",
+        start_line = 1,
+        end_line = 1,
+      },
+      diff_text = "diff --git a/README.md b/README.md",
+      repo = "acme/repo",
+      pr_number = 42,
+      commit_id = "abc123",
+      create_review_comment = function(_)
+        calls = calls + 1
+        return {
+          state = "ok",
+        }
+      end,
+    })
+    vim.g.git_review_range_create_comment_refresh_calls = calls
+  ]=])
+
+  local result = child.lua_get([[vim.g.git_review_range_create_comment_refresh_result]])
+  local calls = child.lua_get([[vim.g.git_review_range_create_comment_refresh_calls]])
+
+  assert(type(result) == "table", "Expected create_comment range-mode result table after refresh")
+  assert(result.state == "unsupported_in_range_mode", "Expected range mode to block create_comment after refresh")
+  assert(result.message == "create_comment is unsupported in range mode", "Expected deterministic range mode message")
+  assert(calls == 0, "Expected blocked comment action to skip transport after refresh")
+end
+
 return set

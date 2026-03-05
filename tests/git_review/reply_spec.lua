@@ -323,6 +323,245 @@ set["session.reply_to_selected_thread auto-opens panel and requires explicit sel
   session.stop({ panel = { close = function() end } })
 end
 
+set["session.reply_to_selected_thread is blocked in range mode"] = function()
+  package.loaded["git-review.session"] = nil
+  local session = require("git-review.session")
+
+  session.start_range({
+    start_ref = "base/head",
+    end_ref = "feature/head",
+    run_command = function(command)
+      if type(command) == "table"
+        and command[1] == "git"
+        and command[2] == "rev-parse"
+        and command[3] == "--show-toplevel"
+      then
+        return {
+          code = 0,
+          stdout = vim.fn.getcwd() .. "\n",
+          stderr = "",
+        }
+      end
+
+      if type(command) == "table"
+        and command[1] == "git"
+        and command[2] == "rev-parse"
+        and command[3] == "--verify"
+        and (command[4] == "base/head^{commit}" or command[4] == "feature/head^{commit}")
+      then
+        return {
+          code = 0,
+          stdout = "validated\n",
+          stderr = "",
+        }
+      end
+
+      if type(command) == "table"
+        and command[1] == "git"
+        and command[2] == "worktree"
+        and command[3] == "add"
+        and command[4] == "--detach"
+        and type(command[5]) == "string"
+        and command[6] == "feature/head"
+      then
+        return {
+          code = 0,
+          stdout = "",
+          stderr = "",
+        }
+      end
+
+      if type(command) == "table"
+        and command[1] == "git"
+        and command[2] == "-C"
+        and type(command[3]) == "string"
+        and command[4] == "diff"
+        and command[5] == "--no-color"
+        and command[6] == "base/head...feature/head"
+      then
+        return {
+          code = 0,
+          stdout = "",
+          stderr = "",
+        }
+      end
+
+      return {
+        code = 1,
+        stdout = "",
+        stderr = "unexpected command",
+      }
+    end,
+    parse_diff = function(_)
+      return {}
+    end,
+    fetch_review_threads = function(_)
+      return {
+        state = "ok",
+        threads = {},
+      }
+    end,
+    panel = {
+      render = function(_) end,
+    },
+    repo_root = vim.fs.normalize(vim.fn.getcwd()),
+    repo = "acme/repo",
+    commit_id = "head-commit",
+    defer_thread_refresh = true,
+  })
+
+  local called = 0
+  local result = session.reply_to_selected_thread({
+    thread_id = "THREAD_42",
+    body = "Thanks",
+    reply_to_thread = function(_, _)
+      called = called + 1
+      return {
+        state = "ok",
+      }
+    end,
+  })
+
+  assert(result.state == "unsupported_in_range_mode", "Expected range mode to block reply_to_selected_thread")
+  assert(result.message == "reply_to_selected_thread is unsupported in range mode", "Expected deterministic range mode message")
+  assert(called == 0, "Expected blocked reply action to skip transport")
+
+  session.stop({ panel = { close = function() end } })
+end
+
+set["session.reply_to_selected_thread remains blocked in range mode after refresh"] = function()
+  package.loaded["git-review.session"] = nil
+  local session = require("git-review.session")
+
+  session.start_range({
+    start_ref = "base/head",
+    end_ref = "feature/head",
+    run_command = function(command)
+      if type(command) == "table"
+        and command[1] == "git"
+        and command[2] == "rev-parse"
+        and command[3] == "--show-toplevel"
+      then
+        return {
+          code = 0,
+          stdout = vim.fn.getcwd() .. "\n",
+          stderr = "",
+        }
+      end
+
+      if type(command) == "table"
+        and command[1] == "git"
+        and command[2] == "rev-parse"
+        and command[3] == "--verify"
+        and (command[4] == "base/head^{commit}" or command[4] == "feature/head^{commit}")
+      then
+        return {
+          code = 0,
+          stdout = "validated\n",
+          stderr = "",
+        }
+      end
+
+      if type(command) == "table"
+        and command[1] == "git"
+        and command[2] == "worktree"
+        and command[3] == "add"
+        and command[4] == "--detach"
+        and type(command[5]) == "string"
+        and command[6] == "feature/head"
+      then
+        return {
+          code = 0,
+          stdout = "",
+          stderr = "",
+        }
+      end
+
+      if type(command) == "table"
+        and command[1] == "git"
+        and command[2] == "-C"
+        and type(command[3]) == "string"
+        and command[4] == "diff"
+        and command[5] == "--no-color"
+        and command[6] == "base/head...feature/head"
+      then
+        return {
+          code = 0,
+          stdout = "",
+          stderr = "",
+        }
+      end
+
+      if type(command) == "table"
+        and command[1] == "git"
+        and command[2] == "rev-parse"
+        and command[3] == "--abbrev-ref"
+        and command[4] == "HEAD"
+      then
+        return {
+          code = 0,
+          stdout = "feature/range\n",
+          stderr = "",
+        }
+      end
+
+      return {
+        code = 1,
+        stdout = "",
+        stderr = "unexpected command",
+      }
+    end,
+    resolve_branch = function(_)
+      return "feature/range"
+    end,
+    resolve_pr_for_branch = function(_, _)
+      return {
+        state = "single_pr",
+        pr = {
+          number = 42,
+          baseRefName = "main",
+        },
+      }
+    end,
+    parse_diff = function(_)
+      return {}
+    end,
+    fetch_review_threads = function(_)
+      return {
+        state = "ok",
+        threads = {},
+      }
+    end,
+    panel = {
+      render = function(_) end,
+    },
+    repo_root = vim.fs.normalize(vim.fn.getcwd()),
+    repo = "acme/repo",
+    commit_id = "head-commit",
+    defer_thread_refresh = true,
+  })
+
+  session.refresh()
+
+  local called = 0
+  local result = session.reply_to_selected_thread({
+    thread_id = "THREAD_42",
+    body = "Thanks",
+    reply_to_thread = function(_, _)
+      called = called + 1
+      return {
+        state = "ok",
+      }
+    end,
+  })
+
+  assert(result.state == "unsupported_in_range_mode", "Expected range mode to block reply_to_selected_thread after refresh")
+  assert(result.message == "reply_to_selected_thread is unsupported in range mode", "Expected deterministic range mode message")
+  assert(called == 0, "Expected blocked reply action to skip transport after refresh")
+
+  session.stop({ panel = { close = function() end } })
+end
+
 set["session.open_panel_toggle filters by scope, toggles, and notifies on fetch"] = function()
   package.loaded["git-review.session"] = nil
   local session = require("git-review.session")

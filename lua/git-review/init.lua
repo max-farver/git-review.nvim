@@ -17,6 +17,11 @@ local ACTIVE_SUBCOMMANDS = {
   "collapse-deletion-blocks",
 }
 
+local INACTIVE_SUBCOMMANDS = {
+  "start",
+  "range",
+}
+
 local ACTIVE_SUBCOMMAND_LOOKUP = {}
 for _, subcommand in ipairs(ACTIVE_SUBCOMMANDS) do
   ACTIVE_SUBCOMMAND_LOOKUP[subcommand] = true
@@ -103,6 +108,35 @@ local function run_session_command(command_name, callback)
 
   notify_result(command_name, result)
   return type(result) == "table" and result.state == "ok", result
+end
+
+local function evaluate_start_like_result(command_name, result)
+  if type(result) == "table" and type(result.state) == "string" and result.state ~= "ok" then
+    if result.state == "cancelled" or result.state == "pending" then
+      return false, result
+    end
+
+    notify_result(command_name, result)
+    return false, result
+  end
+
+  if type(result) == "table" then
+    return true, result
+  end
+
+  vim.notify(command_name .. " failed: unexpected result", vim.log.levels.ERROR)
+  return false, result
+end
+
+local function run_start_like_command(command_name, callback, panic_suffix)
+  local ok, result = pcall(callback)
+  if not ok then
+    local suffix = type(panic_suffix) == "string" and panic_suffix or ""
+    vim.notify(command_name .. " failed: " .. tostring(result) .. suffix, vim.log.levels.ERROR)
+    return false, result
+  end
+
+  return evaluate_start_like_result(command_name, result)
 end
 
 local function prompt_for_body(prompt_text)
@@ -386,30 +420,14 @@ local function register_default_keymaps()
 end
 
 local function run_start_action()
-  local ok, result = pcall(function()
+  local success = run_start_like_command("GitReview start", function()
     return require("git-review.session").start()
-  end)
-  if not ok then
-    vim.notify(
-      "GitReview start failed: "
-        .. tostring(result)
-        .. ". Check your branch upstream or pass opts.diff_command to session.start().",
-      vim.log.levels.ERROR
-    )
-    return false
-  end
-
-  if type(result) == "table" and type(result.state) == "string" and result.state ~= "ok" then
-    notify_result("GitReviewStart", result)
-    return false
-  end
-
-  if type(result) == "table" then
+  end, ". Check your branch upstream or pass opts.diff_command to session.start().")
+  if success then
     register_active_keymaps()
     return true
   end
 
-  vim.notify("GitReviewStart failed: unexpected result", vim.log.levels.ERROR)
   return false
 end
 
@@ -464,7 +482,7 @@ local function complete_dispatcher(arglead, cmdline, _)
     return filter_completion_items(ACTIVE_SUBCOMMANDS, arglead)
   end
 
-  return filter_completion_items({ "start" }, arglead)
+  return filter_completion_items(INACTIVE_SUBCOMMANDS, arglead)
 end
 
 local function valid_subcommands_for_state(is_active)
@@ -472,7 +490,7 @@ local function valid_subcommands_for_state(is_active)
     return ACTIVE_SUBCOMMANDS
   end
 
-  return { "start" }
+  return INACTIVE_SUBCOMMANDS
 end
 
 local function format_valid_subcommands(is_active)
@@ -523,15 +541,13 @@ local function run_dispatcher(command_opts)
   end
 
   local subcommand = args[1]
-  if #args > 1 and type(subcommand) == "string" and subcommand ~= "" then
-    vim.notify(
-      "GitReview: subcommand '" .. subcommand .. "' does not accept arguments. Usage: :GitReview " .. subcommand,
-      vim.log.levels.ERROR
-    )
-    return
-  end
 
   if subcommand == "start" then
+    if #args > 1 then
+      vim.notify("GitReview: subcommand 'start' does not accept arguments. Usage: :GitReview start", vim.log.levels.ERROR)
+      return
+    end
+
     run_start_action()
     return
   end
@@ -544,12 +560,61 @@ local function run_dispatcher(command_opts)
   local is_active = reconcile_active_keymaps(session)
 
   if not is_active then
+    if subcommand == "range" then
+      if #args == 1 then
+        local ok_picker, picker_result = pcall(session.start_range_picker, {
+          command_opts = command_opts,
+          on_complete = function(async_result)
+            local success = evaluate_start_like_result("GitReviewRange", async_result)
+            if success then
+              register_active_keymaps()
+            end
+          end,
+        })
+        if not ok_picker then
+          vim.notify("GitReviewRange failed: " .. tostring(picker_result), vim.log.levels.ERROR)
+          return
+        end
+
+        local success = evaluate_start_like_result("GitReviewRange", picker_result)
+        if success and not (type(picker_result) == "table" and picker_result.state == "pending") then
+          register_active_keymaps()
+        end
+        return
+      end
+
+      if #args == 3 then
+        local success = run_start_like_command("GitReviewRange", function()
+          return session.start_range({
+            start_ref = args[2],
+            end_ref = args[3],
+            command_opts = command_opts,
+          })
+        end)
+        if success then
+          register_active_keymaps()
+        end
+        return
+      end
+
+      vim.notify("GitReview: subcommand 'range' expects zero refs or exactly two refs. Usage: :GitReview range [<start> <end>]", vim.log.levels.ERROR)
+      return
+    end
+
     if ACTIVE_SUBCOMMAND_LOOKUP[subcommand] == true then
       vim.notify("Review not active. Run :GitReview start", vim.log.levels.ERROR)
       return
     end
 
     notify_unknown_or_missing_subcommand(subcommand, false)
+    return
+  end
+
+  if #args > 1 and type(subcommand) == "string" and subcommand ~= "" and ACTIVE_SUBCOMMAND_LOOKUP[subcommand] == true then
+    vim.notify(
+      "GitReview: subcommand '" .. subcommand .. "' does not accept arguments. Usage: :GitReview " .. subcommand,
+      vim.log.levels.ERROR
+    )
     return
   end
 

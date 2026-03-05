@@ -307,6 +307,8 @@ set["GitReview dispatcher completion is session-state aware"] = function()
     return {
       inactive = inactive,
       active = active,
+      inactive_has_start = has(inactive, "start"),
+      inactive_has_range = has(inactive, "range"),
       active_has_stop = has(active, "stop"),
       active_has_comment = has(active, "comment"),
       active_has_reply = has(active, "reply"),
@@ -314,8 +316,9 @@ set["GitReview dispatcher completion is session-state aware"] = function()
     }
   end)()]=])
 
-  assert(type(completion_state.inactive) == "table" and #completion_state.inactive == 1, "Expected inactive completion to only suggest start")
-  assert(completion_state.inactive[1] == "start", "Expected inactive completion to return start")
+  assert(type(completion_state.inactive) == "table" and #completion_state.inactive == 2, "Expected inactive completion to suggest start and range")
+  assert(completion_state.inactive_has_start == true, "Expected inactive completion to include start")
+  assert(completion_state.inactive_has_range == true, "Expected inactive completion to include range")
   assert(completion_state.active_has_stop == true, "Expected active completion to include stop")
   assert(completion_state.active_has_comment == true, "Expected active completion to include comment")
   assert(completion_state.active_has_reply == true, "Expected active completion to include reply")
@@ -421,12 +424,12 @@ set["GitReview dispatcher gates inactive commands and reports actionable errors"
   assert(notifications[1].message == "Review not active. Run :GitReview start", "Expected actionable inactive review message")
   assert(type(notifications[2]) == "table", "Expected missing subcommand notification")
   assert(
-    string.find(notifications[2].message or "", "Valid subcommands: start", 1, true),
+    string.find(notifications[2].message or "", "Valid subcommands: start|range", 1, true),
     "Expected missing subcommand message to list inactive valid subcommands"
   )
   assert(type(notifications[3]) == "table", "Expected unknown inactive subcommand notification")
   assert(
-    string.find(notifications[3].message or "", "Valid subcommands: start", 1, true),
+    string.find(notifications[3].message or "", "Valid subcommands: start|range", 1, true),
     "Expected unknown inactive subcommand message to list inactive valid subcommands"
   )
   assert(type(notifications[4]) == "table", "Expected unknown active subcommand notification")
@@ -434,6 +437,441 @@ set["GitReview dispatcher gates inactive commands and reports actionable errors"
     string.find(notifications[4].message or "", "Valid subcommands: stop", 1, true),
     "Expected unknown active subcommand message to list active valid subcommands"
   )
+end
+
+set["GitReview dispatcher routes range subcommand variants while inactive"] = function()
+  local result = child.lua_get([=[(function()
+    package.loaded["git-review.session"] = {
+      is_active = function()
+        return vim.g.git_review_setup_dispatcher_active == true
+      end,
+      start = function()
+        vim.g.git_review_setup_dispatcher_active = true
+        return { state = "ok" }
+      end,
+      start_range = function(opts)
+        vim.g.git_review_setup_dispatcher_range_calls = (vim.g.git_review_setup_dispatcher_range_calls or 0) + 1
+        vim.g.git_review_setup_dispatcher_range_opts = opts
+        return { hunks = {} }
+      end,
+      start_range_picker = function(opts)
+        vim.g.git_review_setup_dispatcher_range_picker_calls = (vim.g.git_review_setup_dispatcher_range_picker_calls or 0) + 1
+        vim.g.git_review_setup_dispatcher_range_picker_has_on_complete =
+          type(opts) == "table" and type(opts.on_complete) == "function"
+        vim.g.git_review_setup_dispatcher_range_picker_opts = {
+          command_opts = type(opts) == "table" and opts.command_opts or nil,
+        }
+        return { hunks = {} }
+      end,
+    }
+
+    local notifications = {}
+    local original_notify = vim.notify
+    vim.notify = function(message, level)
+      table.insert(notifications, {
+        message = message,
+        level = level,
+      })
+    end
+
+    require("git-review").setup()
+
+    vim.g.git_review_setup_dispatcher_active = false
+    vim.cmd("GitReview range")
+    vim.cmd("GitReview range base/head feature/head")
+
+    vim.notify = original_notify
+
+    local active_map = vim.fn.maparg("\\grs", "n", false, true)
+
+    return {
+      range_calls = vim.g.git_review_setup_dispatcher_range_calls or 0,
+      range_opts = vim.g.git_review_setup_dispatcher_range_opts,
+      range_picker_calls = vim.g.git_review_setup_dispatcher_range_picker_calls or 0,
+      range_picker_opts = vim.g.git_review_setup_dispatcher_range_picker_opts,
+      range_picker_has_on_complete = vim.g.git_review_setup_dispatcher_range_picker_has_on_complete == true,
+      has_active_map = type(active_map) == "table" and active_map.lhs == "\\grs",
+      notifications = notifications,
+    }
+  end)()]=])
+
+  assert(result.range_picker_calls == 1, "Expected :GitReview range to call session.start_range_picker")
+  assert(type(result.range_picker_opts) == "table", "Expected picker path to receive opts table")
+  assert(result.range_picker_has_on_complete == true, "Expected picker path to receive async completion callback")
+  assert(result.range_calls == 1, "Expected :GitReview range <start> <end> to call session.start_range")
+  assert(type(result.range_opts) == "table", "Expected range path to receive opts table")
+  assert(result.range_opts.start_ref == "base/head", "Expected start_ref to be forwarded")
+  assert(result.range_opts.end_ref == "feature/head", "Expected end_ref to be forwarded")
+  assert(result.has_active_map == true, "Expected successful range path to register active keymaps")
+  assert(type(result.notifications) == "table" and #result.notifications == 0, "Expected no dispatcher notifications for valid range commands")
+end
+
+set["GitReview dispatcher handles range picker cancel without activating session"] = function()
+  local result = child.lua_get([=[(function()
+    package.loaded["git-review.session"] = {
+      is_active = function()
+        return false
+      end,
+      start = function()
+        return { state = "ok" }
+      end,
+      start_range_picker = function(_)
+        vim.g.git_review_setup_dispatcher_cancel_picker_calls =
+          (vim.g.git_review_setup_dispatcher_cancel_picker_calls or 0) + 1
+        return { state = "cancelled" }
+      end,
+    }
+
+    local notifications = {}
+    local original_notify = vim.notify
+    vim.notify = function(message, level)
+      table.insert(notifications, {
+        message = message,
+        level = level,
+      })
+    end
+
+    require("git-review").setup()
+    vim.cmd("GitReview range")
+
+    vim.notify = original_notify
+
+    local active_map = vim.fn.maparg("\\grs", "n", false, true)
+
+    return {
+      picker_calls = vim.g.git_review_setup_dispatcher_cancel_picker_calls or 0,
+      has_active_map = type(active_map) == "table" and active_map.lhs == "\\grs",
+      notifications = notifications,
+    }
+  end)()]=])
+
+  assert(result.picker_calls == 1, "Expected :GitReview range to call session.start_range_picker")
+  assert(result.has_active_map == false, "Expected cancelled picker flow to avoid active keymap registration")
+  assert(type(result.notifications) == "table" and #result.notifications == 0, "Expected cancelled picker flow to be silent")
+end
+
+set["GitReview dispatcher activates session after async range picker completion"] = function()
+  local result = child.lua_get([=[(function()
+    package.loaded["git-review.session"] = {
+      is_active = function()
+        return false
+      end,
+      start = function()
+        return { state = "ok" }
+      end,
+      start_range_picker = function(opts)
+        vim.g.git_review_setup_dispatcher_async_picker_calls =
+          (vim.g.git_review_setup_dispatcher_async_picker_calls or 0) + 1
+        if type(opts) == "table" and type(opts.on_complete) == "function" then
+          vim.schedule(function()
+            opts.on_complete({
+              hunks = {},
+            })
+          end)
+        end
+
+        return { state = "pending" }
+      end,
+    }
+
+    local notifications = {}
+    local original_notify = vim.notify
+    vim.notify = function(message, level)
+      table.insert(notifications, {
+        message = message,
+        level = level,
+      })
+    end
+
+    local scheduled = {}
+    local original_schedule = vim.schedule
+    vim.schedule = function(fn)
+      table.insert(scheduled, fn)
+    end
+
+    require("git-review").setup()
+    vim.cmd("GitReview range")
+
+    local active_map_before = vim.fn.maparg("\\grs", "n", false, true)
+    for _, callback in ipairs(scheduled) do
+      callback()
+    end
+    local active_map_after = vim.fn.maparg("\\grs", "n", false, true)
+
+    vim.notify = original_notify
+    vim.schedule = original_schedule
+
+    return {
+      picker_calls = vim.g.git_review_setup_dispatcher_async_picker_calls or 0,
+      has_active_map_before = type(active_map_before) == "table" and active_map_before.lhs == "\\grs",
+      has_active_map_after = type(active_map_after) == "table" and active_map_after.lhs == "\\grs",
+      notifications = notifications,
+    }
+  end)()]=])
+
+  assert(result.picker_calls == 1, "Expected :GitReview range to call async start_range_picker once")
+  assert(result.has_active_map_before == false, "Expected pending picker flow to defer keymap registration")
+  assert(result.has_active_map_after == true, "Expected async picker completion to register active keymaps")
+  assert(type(result.notifications) == "table" and #result.notifications == 0, "Expected async picker flow to be silent")
+end
+
+set["GitReview dispatcher async range lifecycle wires picker activation and stop cleanup"] = function()
+  local result = child.lua_get([=[(function()
+    vim.g.git_review_setup_dispatcher_lifecycle_active = false
+
+    package.loaded["git-review.session"] = {
+      is_active = function()
+        return vim.g.git_review_setup_dispatcher_lifecycle_active == true
+      end,
+      start = function()
+        return { state = "ok" }
+      end,
+      start_range_picker = function(opts)
+        vim.g.git_review_setup_dispatcher_lifecycle_picker_calls =
+          (vim.g.git_review_setup_dispatcher_lifecycle_picker_calls or 0) + 1
+        if type(opts) == "table" and type(opts.on_complete) == "function" then
+          vim.schedule(function()
+            vim.g.git_review_setup_dispatcher_lifecycle_active = true
+            opts.on_complete({
+              hunks = {},
+            })
+          end)
+        end
+
+        return { state = "pending" }
+      end,
+      stop = function()
+        vim.g.git_review_setup_dispatcher_lifecycle_stop_calls =
+          (vim.g.git_review_setup_dispatcher_lifecycle_stop_calls or 0) + 1
+        vim.g.git_review_setup_dispatcher_lifecycle_cleanup_calls =
+          (vim.g.git_review_setup_dispatcher_lifecycle_cleanup_calls or 0) + 1
+        vim.g.git_review_setup_dispatcher_lifecycle_active = false
+        return { state = "ok" }
+      end,
+    }
+
+    local notifications = {}
+    local original_notify = vim.notify
+    vim.notify = function(message, level)
+      table.insert(notifications, {
+        message = message,
+        level = level,
+      })
+    end
+
+    local scheduled = {}
+    local original_schedule = vim.schedule
+    vim.schedule = function(fn)
+      table.insert(scheduled, fn)
+    end
+
+    require("git-review").setup()
+    vim.cmd("GitReview range")
+
+    local active_map_before = vim.fn.maparg("\\grs", "n", false, true)
+    for _, callback in ipairs(scheduled) do
+      callback()
+    end
+    local active_map_after_picker = vim.fn.maparg("\\grs", "n", false, true)
+
+    vim.cmd("GitReview stop")
+    local active_map_after_stop = vim.fn.maparg("\\grs", "n", false, true)
+
+    vim.notify = original_notify
+    vim.schedule = original_schedule
+
+    return {
+      picker_calls = vim.g.git_review_setup_dispatcher_lifecycle_picker_calls or 0,
+      stop_calls = vim.g.git_review_setup_dispatcher_lifecycle_stop_calls or 0,
+      cleanup_calls = vim.g.git_review_setup_dispatcher_lifecycle_cleanup_calls or 0,
+      has_active_map_before = type(active_map_before) == "table" and active_map_before.lhs == "\\grs",
+      has_active_map_after_picker = type(active_map_after_picker) == "table" and active_map_after_picker.lhs == "\\grs",
+      has_active_map_after_stop = type(active_map_after_stop) == "table" and active_map_after_stop.lhs == "\\grs",
+      notifications = notifications,
+    }
+  end)()]=])
+
+  assert(result.picker_calls == 1, "Expected :GitReview range picker flow to run once")
+  assert(result.has_active_map_before == false, "Expected pending picker flow to defer active keymaps")
+  assert(result.has_active_map_after_picker == true, "Expected async picker completion to activate keymaps")
+  assert(result.stop_calls == 1, "Expected :GitReview stop to be routed once after activation")
+  assert(result.cleanup_calls == 1, "Expected stop cleanup hook to run once")
+  assert(result.has_active_map_after_stop == false, "Expected stop to unregister active keymaps")
+  assert(type(result.notifications) == "table" and #result.notifications == 0, "Expected lifecycle flow to remain silent")
+end
+
+set["GitReview dispatcher treats range as inactive-only"] = function()
+  local result = child.lua_get([=[(function()
+    package.loaded["git-review.session"] = {
+      is_active = function()
+        return true
+      end,
+      start = function()
+        return { state = "ok" }
+      end,
+      start_range = function(_)
+        vim.g.git_review_setup_dispatcher_range_calls = (vim.g.git_review_setup_dispatcher_range_calls or 0) + 1
+        return { hunks = {} }
+      end,
+      start_range_picker = function(_)
+        vim.g.git_review_setup_dispatcher_range_picker_calls = (vim.g.git_review_setup_dispatcher_range_picker_calls or 0) + 1
+        return { hunks = {} }
+      end,
+    }
+
+    local notifications = {}
+    local original_notify = vim.notify
+    vim.notify = function(message, level)
+      table.insert(notifications, {
+        message = message,
+        level = level,
+      })
+    end
+
+    require("git-review").setup()
+    vim.cmd("GitReview range")
+    vim.cmd("GitReview range base/head feature/head")
+
+    vim.notify = original_notify
+
+    return {
+      range_calls = vim.g.git_review_setup_dispatcher_range_calls or 0,
+      range_picker_calls = vim.g.git_review_setup_dispatcher_range_picker_calls or 0,
+      notifications = notifications,
+    }
+  end)()]=])
+
+  local notifications = result.notifications or {}
+  assert(result.range_calls == 0, "Expected active dispatcher state to reject :GitReview range <start> <end>")
+  assert(result.range_picker_calls == 0, "Expected active dispatcher state to reject :GitReview range")
+  assert(type(notifications[1]) == "table", "Expected active range without refs to report unknown subcommand")
+  assert(
+    string.find(notifications[1].message or "", "unknown subcommand 'range'", 1, true),
+    "Expected active range without refs to be unknown"
+  )
+  assert(
+    string.find(notifications[1].message or "", "Valid subcommands: stop", 1, true),
+    "Expected active unknown message to list active subcommands"
+  )
+  assert(type(notifications[2]) == "table", "Expected active range with refs to report unknown subcommand")
+  assert(
+    string.find(notifications[2].message or "", "unknown subcommand 'range'", 1, true),
+    "Expected active range with refs to be unknown"
+  )
+end
+
+set["GitReview dispatcher accepts real start_range success contract"] = function()
+  local result = child.lua_get([=[(function()
+    package.loaded["git-review.session"] = nil
+    local session = require("git-review.session")
+
+    local original_start = session.start
+    local original_is_active = session.is_active
+    local original_system = package.loaded["git-review.system"]
+
+    package.loaded["git-review.system"] = {
+      run = function(command)
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "rev-parse"
+          and command[3] == "--show-toplevel"
+        then
+          return {
+            code = 0,
+            stdout = vim.fn.getcwd() .. "\n",
+            stderr = "",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "rev-parse"
+          and command[3] == "--verify"
+          and (command[4] == "base/head^{commit}" or command[4] == "feature/head^{commit}")
+        then
+          return {
+            code = 0,
+            stdout = "validated\n",
+            stderr = "",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "worktree"
+          and command[3] == "add"
+          and command[4] == "--detach"
+          and type(command[5]) == "string"
+          and command[6] == "feature/head"
+        then
+          return {
+            code = 0,
+            stdout = "",
+            stderr = "",
+          }
+        end
+
+        return {
+          code = 1,
+          stdout = "",
+          stderr = "unexpected command",
+        }
+      end,
+    }
+
+    session.start = function(opts)
+      vim.g.git_review_setup_dispatcher_real_range_calls =
+        (vim.g.git_review_setup_dispatcher_real_range_calls or 0) + 1
+      vim.g.git_review_setup_dispatcher_real_range_opts = opts
+      vim.g.git_review_setup_dispatcher_active = true
+      return { hunks = {} }
+    end
+
+    session.is_active = function()
+      return vim.g.git_review_setup_dispatcher_active == true
+    end
+
+    local notifications = {}
+    local original_notify = vim.notify
+    vim.notify = function(message, level)
+      table.insert(notifications, {
+        message = message,
+        level = level,
+      })
+    end
+
+    require("git-review").setup()
+
+    vim.g.git_review_setup_dispatcher_active = false
+    vim.cmd("GitReview range base/head feature/head")
+
+    vim.notify = original_notify
+    session.start = original_start
+    session.is_active = original_is_active
+    package.loaded["git-review.system"] = original_system
+
+    local active_map = vim.fn.maparg("\\grs", "n", false, true)
+
+    return {
+      range_calls = vim.g.git_review_setup_dispatcher_real_range_calls or 0,
+      range_opts = vim.g.git_review_setup_dispatcher_real_range_opts,
+      has_active_map = type(active_map) == "table" and active_map.lhs == "\\grs",
+      notifications = notifications,
+    }
+  end)()]=])
+
+  assert(result.range_calls == 1, "Expected real session.start_range path to call session.start once")
+  assert(type(result.range_opts) == "table", "Expected real session.start to receive options")
+  assert(type(result.range_opts.diff_command) == "table", "Expected real session.start_range to build diff_command")
+  assert(result.range_opts.diff_command[1] == "git", "Expected start_range diff command to remain git-based")
+  assert(result.range_opts.diff_command[2] == "-C", "Expected start_range diff command to execute in detached worktree")
+  assert(type(result.range_opts.diff_command[3]) == "string" and result.range_opts.diff_command[3] ~= "", "Expected worktree path in diff command")
+  assert(result.range_opts.diff_command[4] == "diff", "Expected diff subcommand in range diff command")
+  assert(result.range_opts.diff_command[6] == "base/head...feature/head", "Expected start_range diff_command refs")
+  assert(result.range_opts.start_ref == nil, "Expected start_range to strip start_ref before start")
+  assert(result.range_opts.end_ref == nil, "Expected start_range to strip end_ref before start")
+  assert(result.has_active_map == true, "Expected successful real range path to register active keymaps")
+  assert(type(result.notifications) == "table" and #result.notifications == 0, "Expected no unknown-error notifications for real range success")
 end
 
 set["GitReview dispatcher rejects extra subcommand arguments"] = function()

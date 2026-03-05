@@ -48,6 +48,8 @@ The plugin bootstrap auto-registers commands during startup.
 Run `:GitReview <subcommand>` from a branch that has a pull request:
 
 - `:GitReview start` - open a file picker for changed files, seed the current window location list with hunks after selection (using startup-cached hunk data when available), keep comments panel closed by default, and enable hunk highlights in file buffers.
+- `:GitReview range` - open a two-step commit picker (end first, then start) and start a commit-range review session for `start...end` (available when review is inactive, like `:GitReview start`).
+- `:GitReview range <start> <end>` - start a commit-range review session directly for `start...end`.
 - `:GitReview files` - populate the review quickfix list with changed files without opening the window.
 - `:GitReview refresh` - recompute hunks and refresh panel/thread state.
 - `:GitReview panel` - toggle the comments panel scoped to the current buffer path; renders cached comments immediately and refreshes comments in the background.
@@ -62,6 +64,8 @@ Run `:GitReview <subcommand>` from a branch that has a pull request:
 - `:GitReview reply` - reply to the currently selected review thread.
 - `:GitReview submit` - submit a review; prompts for `APPROVE` or `REQUEST_CHANGES`, then an optional message body.
 - `:GitReview stop` - stop review mode, clear active/passive/deletion highlights, and clear review quickfix and review hunk location list items.
+
+Range sessions are read-only: mutating actions (`:GitReview comment`, `:GitReview reply`, and `:GitReview submit`) are rejected in range mode.
 
 While review mode is active, use location list (`:lnext` / `:lprev`) to move between
 hunks in the selected file. Run `:GitReview files` when you want quickfix navigation,
@@ -133,6 +137,8 @@ Default keybinds (`keymaps.enabled = true`) use the prefix `<leader>gr`:
   - `toggle_resolved = "t"`, `toggle_deletion_block = "b"` (nearest block), `toggle_deletions = "d"` (buffer-wide toggle)
 - `keymaps.visual` action suffixes (defaults):
   - `comment = "c"`
+
+In range mode, review sessions are read-only regardless of keymap configuration (`comment`, `reply`, and `submit` are rejected).
 
 Example:
 

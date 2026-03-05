@@ -207,6 +207,675 @@ index 1111111..2222222 100644
   assert(cursor_line == 10, "Expected cursor to move to first hunk line")
 end
 
+set["session.start_range validates refs before worktree creation"] = function()
+  child.lua([[package.loaded["git-review.session"] = nil]])
+
+  child.lua([=[
+    local session = require("git-review.session")
+    vim.ui.select = nil
+
+    local commands = {}
+    local range_result = session.start_range({
+      start_ref = "base/head",
+      end_ref = "feature/head",
+      run_command = function(command)
+        table.insert(commands, command)
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "rev-parse"
+          and command[3] == "--show-toplevel"
+        then
+          return {
+            code = 0,
+            stdout = vim.fn.getcwd() .. "\n",
+            stderr = "",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "rev-parse"
+          and command[3] == "--verify"
+          and command[4] == "base/head^{commit}"
+        then
+          return {
+            code = 0,
+            stdout = "base-commit\n",
+            stderr = "",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "rev-parse"
+          and command[3] == "--verify"
+          and command[4] == "feature/head^{commit}"
+        then
+          return {
+            code = 1,
+            stdout = "",
+            stderr = "unknown revision",
+          }
+        end
+
+        if type(command) == "table" and command[1] == "git" and command[2] == "worktree" and command[3] == "add" then
+          return {
+            code = 0,
+            stdout = "",
+            stderr = "",
+          }
+        end
+
+        return {
+          code = 1,
+          stdout = "",
+          stderr = "unexpected command",
+        }
+      end,
+      parse_diff = function(_)
+        return {}
+      end,
+      fetch_review_threads = function(_)
+        return {
+          state = "ok",
+          threads = {},
+        }
+      end,
+      panel = {
+        render = function(_) end,
+      },
+      defer_thread_refresh = true,
+    })
+
+    vim.g.git_review_start_range_ref_validation_result = range_result
+    vim.g.git_review_start_range_ref_validation_commands = commands
+  ]=])
+
+  local result = child.lua_get([[vim.g.git_review_start_range_ref_validation_result]])
+  local commands = child.lua_get([[vim.g.git_review_start_range_ref_validation_commands]])
+
+  assert(type(result) == "table" and result.state == "command_error", "Expected invalid end ref to fail start_range")
+  assert(
+    type(result.message) == "string" and string.find(result.message, "feature/head", 1, true),
+    "Expected invalid end ref error to include ref name"
+  )
+  assert(
+    type(result.message) == "string"
+      and string.find(result.message, "git rev-parse --verify feature/head^{commit}", 1, true),
+    "Expected invalid end ref error to include actionable git rev-parse guidance"
+  )
+
+  local validated_start = false
+  local validated_end = false
+  local worktree_add_seen = false
+  for _, command in ipairs(commands or {}) do
+    if type(command) == "table" and command[1] == "git" and command[2] == "rev-parse" and command[3] == "--verify" then
+      if command[4] == "base/head^{commit}" then
+        validated_start = true
+      elseif command[4] == "feature/head^{commit}" then
+        validated_end = true
+      end
+    end
+
+    if type(command) == "table" and command[1] == "git" and command[2] == "worktree" and command[3] == "add" then
+      worktree_add_seen = true
+    end
+  end
+
+  assert(validated_start == true, "Expected start ref validation before worktree creation")
+  assert(validated_end == true, "Expected end ref validation before worktree creation")
+  assert(worktree_add_seen == false, "Expected invalid refs to prevent worktree creation")
+end
+
+set["session.start_range cleans up owned worktree when start fails after creation"] = function()
+  child.lua([[package.loaded["git-review.session"] = nil]])
+
+  child.lua([=[
+    local session = require("git-review.session")
+    vim.ui.select = nil
+
+    local commands = {}
+    local worktree_add_path = nil
+    local worktree_remove_path = nil
+
+    local ok_start, start_result = pcall(session.start_range, {
+      start_ref = "base/head",
+      end_ref = "feature/head",
+      run_command = function(command)
+        table.insert(commands, command)
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "rev-parse"
+          and command[3] == "--show-toplevel"
+        then
+          return {
+            code = 0,
+            stdout = vim.fn.getcwd() .. "\n",
+            stderr = "",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "rev-parse"
+          and command[3] == "--verify"
+          and (command[4] == "base/head^{commit}" or command[4] == "feature/head^{commit}")
+        then
+          return {
+            code = 0,
+            stdout = "validated\n",
+            stderr = "",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "worktree"
+          and command[3] == "add"
+          and command[4] == "--detach"
+        then
+          worktree_add_path = command[5]
+          return {
+            code = 0,
+            stdout = "",
+            stderr = "",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "-C"
+          and type(command[3]) == "string"
+          and command[4] == "diff"
+          and command[5] == "--no-color"
+        then
+          return {
+            code = 1,
+            stdout = "",
+            stderr = "diff failed",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "worktree"
+          and command[3] == "remove"
+          and command[4] == "--force"
+        then
+          worktree_remove_path = command[5]
+          return {
+            code = 0,
+            stdout = "",
+            stderr = "",
+          }
+        end
+
+        return {
+          code = 1,
+          stdout = "",
+          stderr = "unexpected command",
+        }
+      end,
+      parse_diff = function(_)
+        return {}
+      end,
+      fetch_review_threads = function(_)
+        return {
+          state = "ok",
+          threads = {},
+        }
+      end,
+      panel = {
+        render = function(_) end,
+      },
+      defer_thread_refresh = true,
+    })
+
+    vim.g.git_review_start_range_cleanup_ok = ok_start
+    vim.g.git_review_start_range_cleanup_result = start_result
+    vim.g.git_review_start_range_cleanup_commands = commands
+    vim.g.git_review_start_range_cleanup_worktree_add_path = worktree_add_path
+    vim.g.git_review_start_range_cleanup_worktree_remove_path = worktree_remove_path
+  ]=])
+
+  local ok_start = child.lua_get([[vim.g.git_review_start_range_cleanup_ok]])
+  local result = child.lua_get([[vim.g.git_review_start_range_cleanup_result]])
+  local commands = child.lua_get([[vim.g.git_review_start_range_cleanup_commands]])
+  local add_path = child.lua_get([[vim.g.git_review_start_range_cleanup_worktree_add_path]])
+  local remove_path = child.lua_get([[vim.g.git_review_start_range_cleanup_worktree_remove_path]])
+
+  assert(ok_start == true, "Expected start_range failure path to return an error table")
+  assert(type(result) == "table" and result.state == "command_error", "Expected start failure to return command_error")
+  assert(type(result.message) == "string" and string.find(result.message, "diff failed", 1, true), "Expected start failure detail")
+  assert(type(add_path) == "string" and add_path ~= "", "Expected detached worktree path from add command")
+  assert(remove_path == add_path, "Expected start_range failure cleanup to remove the created worktree")
+
+  local remove_seen = false
+  for _, command in ipairs(commands or {}) do
+    if type(command) == "table" and command[1] == "git" and command[2] == "worktree" and command[3] == "remove" then
+      remove_seen = true
+      break
+    end
+  end
+
+  assert(remove_seen == true, "Expected start_range failure path to attempt worktree cleanup")
+end
+
+set["session.start_range creates detached worktree and runs diff there"] = function()
+  child.lua([[package.loaded["git-review.session"] = nil]])
+
+  child.lua([=[
+    local session = require("git-review.session")
+    vim.ui.select = nil
+
+    local commands = {}
+    local worktree_add_path = nil
+    local diff_cwd = nil
+
+    local range_result = session.start_range({
+      start_ref = "base/head",
+      end_ref = "feature/head",
+      run_command = function(command)
+        table.insert(commands, command)
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "rev-parse"
+          and command[3] == "--show-toplevel"
+        then
+          return {
+            code = 0,
+            stdout = vim.fn.getcwd() .. "\n",
+            stderr = "",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "rev-parse"
+          and command[3] == "--verify"
+          and (command[4] == "base/head^{commit}" or command[4] == "feature/head^{commit}")
+        then
+          return {
+            code = 0,
+            stdout = "validated\n",
+            stderr = "",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "worktree"
+          and command[3] == "add"
+          and command[4] == "--detach"
+        then
+          worktree_add_path = command[5]
+          return {
+            code = 0,
+            stdout = "",
+            stderr = "",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "-C"
+          and type(command[3]) == "string"
+          and command[4] == "diff"
+          and command[5] == "--no-color"
+          and command[6] == "base/head...feature/head"
+        then
+          diff_cwd = command[3]
+          return {
+            code = 0,
+            stdout = "",
+            stderr = "",
+          }
+        end
+
+        return {
+          code = 1,
+          stdout = "",
+          stderr = "unexpected command",
+        }
+      end,
+      parse_diff = function(_)
+        return {}
+      end,
+      fetch_review_threads = function(_)
+        return {
+          state = "ok",
+          threads = {},
+        }
+      end,
+      panel = {
+        render = function(_) end,
+      },
+      repo = "acme/repo",
+      commit_id = "head-commit",
+      defer_thread_refresh = true,
+    })
+
+    local active_session = nil
+    for idx = 1, 40 do
+      local upvalue_name, upvalue_value = debug.getupvalue(session.start, idx)
+      if upvalue_name == nil then
+        break
+      end
+
+      if upvalue_name == "current_session" then
+        active_session = upvalue_value
+        break
+      end
+    end
+
+    vim.g.git_review_start_range_result = range_result
+    vim.g.git_review_start_range_commands = commands
+    vim.g.git_review_start_range_worktree_add_path = worktree_add_path
+    vim.g.git_review_start_range_diff_cwd = diff_cwd
+    vim.g.git_review_start_range_mode = type(active_session) == "table" and active_session.mode or nil
+    vim.g.git_review_start_range_start = type(active_session) == "table" and active_session.range_start or nil
+    vim.g.git_review_start_range_end = type(active_session) == "table" and active_session.range_end or nil
+    vim.g.git_review_start_range_review_commit_id =
+      type(active_session) == "table" and active_session.review_commit_id or nil
+    vim.g.git_review_start_range_worktree_path = type(active_session) == "table" and active_session.worktree_path or nil
+    vim.g.git_review_start_range_worktree_owned = type(active_session) == "table" and active_session.worktree_owned or nil
+    vim.g.git_review_start_range_review_repo_root = type(active_session) == "table" and active_session.review_repo_root or nil
+  ]=])
+
+  local result = child.lua_get([[vim.g.git_review_start_range_result]])
+  local commands = child.lua_get([[vim.g.git_review_start_range_commands]])
+  local worktree_add_path = child.lua_get([[vim.g.git_review_start_range_worktree_add_path]])
+  local diff_cwd = child.lua_get([[vim.g.git_review_start_range_diff_cwd]])
+  local mode = child.lua_get([[vim.g.git_review_start_range_mode]])
+  local range_start = child.lua_get([[vim.g.git_review_start_range_start]])
+  local range_end = child.lua_get([[vim.g.git_review_start_range_end]])
+  local review_commit_id = child.lua_get([[vim.g.git_review_start_range_review_commit_id]])
+  local session_worktree_path = child.lua_get([[vim.g.git_review_start_range_worktree_path]])
+  local session_worktree_owned = child.lua_get([[vim.g.git_review_start_range_worktree_owned]])
+  local review_repo_root = child.lua_get([[vim.g.git_review_start_range_review_repo_root]])
+
+  assert(type(result) == "table" and type(result.hunks) == "table", "Expected start_range to return start result")
+  assert(mode == "range", "Expected active session mode to be range")
+  assert(range_start == "base/head", "Expected active session range_start context")
+  assert(range_end == "feature/head", "Expected active session range_end context")
+  assert(review_commit_id == "feature/head", "Expected active session review_commit_id to match range end")
+
+  local worktree_add_seen = false
+  local detached_seen = false
+  for _, command in ipairs(commands or {}) do
+    if type(command) == "table" and command[1] == "git" and command[2] == "worktree" and command[3] == "add" then
+      worktree_add_seen = true
+      detached_seen = command[4] == "--detach"
+      break
+    end
+  end
+
+  assert(worktree_add_seen == true, "Expected start_range to call git worktree add")
+  assert(detached_seen == true, "Expected start_range to create detached worktree")
+  assert(type(worktree_add_path) == "string" and worktree_add_path ~= "", "Expected detached worktree path argument")
+  assert(diff_cwd == worktree_add_path, "Expected git diff to run in detached worktree context")
+  assert(session_worktree_path == worktree_add_path, "Expected session worktree_path to match created worktree")
+  assert(session_worktree_owned == true, "Expected session to mark worktree ownership")
+  assert(type(review_repo_root) == "string" and review_repo_root ~= "", "Expected session review_repo_root metadata")
+end
+
+set["session.start_range_picker selects range refs and delegates to start_range"] = function()
+  child.lua([[package.loaded["git-review.session"] = nil]])
+
+  child.lua([=[
+    local session = require("git-review.session")
+    local original_start_range = session.start_range
+
+    local commands = {}
+    session.start_range = function(opts)
+      vim.g.git_review_range_picker_forwarded_start_ref = type(opts) == "table" and opts.start_ref or nil
+      vim.g.git_review_range_picker_forwarded_end_ref = type(opts) == "table" and opts.end_ref or nil
+      local command_opts = type(opts) == "table" and opts.command_opts or nil
+      vim.g.git_review_range_picker_forwarded_line1 = type(command_opts) == "table" and command_opts.line1 or nil
+      return {
+        hunks = {},
+      }
+    end
+
+    local picker_prompts = {}
+    local picker_defaults = {}
+    local picker_labels = {}
+    vim.ui.select = function(items, select_opts, on_choice)
+      table.insert(picker_prompts, select_opts.prompt)
+      table.insert(picker_defaults, select_opts.default)
+
+      local format_item = type(select_opts) == "table" and select_opts.format_item or nil
+      if type(format_item) == "function" and type(items) == "table" and type(items[1]) == "table" then
+        table.insert(picker_labels, format_item(items[1]))
+      end
+
+      if #picker_prompts == 1 then
+        on_choice(items[1], 1)
+      else
+        on_choice(items[2], 2)
+      end
+    end
+
+    local picker_result = session.start_range_picker({
+      command_opts = {
+        line1 = 3,
+      },
+      run_command = function(command)
+        table.insert(commands, command)
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "log"
+          and command[3] == "--format=%H%x09%s"
+          and command[4] == "HEAD"
+        then
+          return {
+            code = 0,
+            stdout = "ccccccc3\tnewest\nbbbbbbb2\tmiddle\naaaaaaa1\toldest\n",
+            stderr = "",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "log"
+          and command[3] == "--format=%H%x09%s"
+          and command[4] == "ccccccc3"
+        then
+          return {
+            code = 0,
+            stdout = "ccccccc3\tnewest\nbbbbbbb2\tmiddle\naaaaaaa1\toldest\n",
+            stderr = "",
+          }
+        end
+
+        return {
+          code = 1,
+          stdout = "",
+          stderr = "unexpected command",
+        }
+      end,
+    })
+
+    session.start_range = original_start_range
+    vim.g.git_review_range_picker_result = picker_result
+    vim.g.git_review_range_picker_prompts = picker_prompts
+    vim.g.git_review_range_picker_defaults = picker_defaults
+    vim.g.git_review_range_picker_labels = picker_labels
+    vim.g.git_review_range_picker_commands = commands
+  ]=])
+
+  local picker_result = child.lua_get([[vim.g.git_review_range_picker_result]])
+  local forwarded_start_ref = child.lua_get([[vim.g.git_review_range_picker_forwarded_start_ref]])
+  local forwarded_end_ref = child.lua_get([[vim.g.git_review_range_picker_forwarded_end_ref]])
+  local forwarded_line1 = child.lua_get([[vim.g.git_review_range_picker_forwarded_line1]])
+  local prompts = child.lua_get([[vim.g.git_review_range_picker_prompts]])
+  local defaults = child.lua_get([[vim.g.git_review_range_picker_defaults]])
+  local labels = child.lua_get([[vim.g.git_review_range_picker_labels]])
+  local commands = child.lua_get([[vim.g.git_review_range_picker_commands]])
+
+  assert(type(picker_result) == "table" and type(picker_result.hunks) == "table", "Expected picker to return delegated start_range result")
+  assert(forwarded_start_ref == "bbbbbbb2", "Expected picker-selected start_ref to be forwarded")
+  assert(forwarded_end_ref == "ccccccc3", "Expected picker-selected end_ref to be forwarded")
+  assert(forwarded_line1 == 3, "Expected picker to preserve passthrough options")
+
+  assert(type(prompts) == "table" and #prompts == 2, "Expected two-step commit picker flow")
+  assert(type(defaults) == "table" and defaults[1] == 1, "Expected range_end picker default to HEAD")
+  assert(type(defaults) == "table" and defaults[2] == 2, "Expected range_start picker default to parent of selected end")
+  assert(type(labels) == "table" and string.find(labels[1], "ccccccc", 1, true), "Expected picker labels to include short SHA")
+  assert(type(labels) == "table" and string.find(labels[1], "newest", 1, true), "Expected picker labels to include commit subject")
+
+  assert(type(commands) == "table" and #commands == 2, "Expected picker to resolve commits twice (HEAD then selected end)")
+  assert(commands[1][4] == "HEAD", "Expected first commit set to use HEAD ancestry")
+  assert(commands[2][4] == "ccccccc3", "Expected second commit set limited to selected end ancestry")
+end
+
+set["session.start_range_picker supports delayed async selections"] = function()
+  child.lua([[package.loaded["git-review.session"] = nil]])
+
+  child.lua([=[
+    local session = require("git-review.session")
+    local original_start_range = session.start_range
+
+    session.start_range = function(opts)
+      vim.g.git_review_range_picker_async_start_ref = type(opts) == "table" and opts.start_ref or nil
+      vim.g.git_review_range_picker_async_end_ref = type(opts) == "table" and opts.end_ref or nil
+      return {
+        hunks = {},
+      }
+    end
+
+    local select_calls = 0
+    vim.ui.select = function(items, _, on_choice)
+      select_calls = select_calls + 1
+      local call_index = select_calls
+      vim.defer_fn(function()
+        if call_index == 1 then
+          on_choice(items[1], 1)
+          return
+        end
+
+        on_choice(items[2], 2)
+      end, 120)
+    end
+
+    local picker_result = session.start_range_picker({
+      run_command = function(command)
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "log"
+          and command[3] == "--format=%H%x09%s"
+          and command[4] == "HEAD"
+        then
+          return {
+            code = 0,
+            stdout = "ccccccc3\tnewest\nbbbbbbb2\tmiddle\naaaaaaa1\toldest\n",
+            stderr = "",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "log"
+          and command[3] == "--format=%H%x09%s"
+          and command[4] == "ccccccc3"
+        then
+          return {
+            code = 0,
+            stdout = "ccccccc3\tnewest\nbbbbbbb2\tmiddle\naaaaaaa1\toldest\n",
+            stderr = "",
+          }
+        end
+
+        return {
+          code = 1,
+          stdout = "",
+          stderr = "unexpected command",
+        }
+      end,
+      on_complete = function(result)
+        vim.g.git_review_range_picker_async_result = result
+      end,
+    })
+
+    vim.wait(500, function()
+      return vim.g.git_review_range_picker_async_result ~= nil
+    end, 10)
+
+    session.start_range = original_start_range
+    vim.g.git_review_range_picker_async_initial_result = picker_result
+  ]=])
+
+  local initial_result = child.lua_get([[vim.g.git_review_range_picker_async_initial_result]])
+  local async_result = child.lua_get([[vim.g.git_review_range_picker_async_result]])
+  local forwarded_start_ref = child.lua_get([[vim.g.git_review_range_picker_async_start_ref]])
+  local forwarded_end_ref = child.lua_get([[vim.g.git_review_range_picker_async_end_ref]])
+
+  assert(type(initial_result) == "table" and initial_result.state == "pending", "Expected delayed picker to return pending")
+  assert(type(async_result) == "table" and type(async_result.hunks) == "table", "Expected delayed picker completion to succeed")
+  assert(forwarded_start_ref == "bbbbbbb2", "Expected delayed picker-selected start_ref to be forwarded")
+  assert(forwarded_end_ref == "ccccccc3", "Expected delayed picker-selected end_ref to be forwarded")
+end
+
+set["session.start_range_picker exits cleanly when picker is cancelled"] = function()
+  child.lua([[package.loaded["git-review.session"] = nil]])
+
+  child.lua([=[
+    local session = require("git-review.session")
+    local original_start_range = session.start_range
+
+    session.start_range = function(_)
+      vim.g.git_review_range_picker_cancel_start_called = true
+      return {
+        hunks = {},
+      }
+    end
+
+    vim.ui.select = function(_, _, on_choice)
+      on_choice(nil, nil)
+    end
+
+    local picker_result = session.start_range_picker({
+      run_command = function(command)
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "log"
+          and command[3] == "--format=%H%x09%s"
+          and command[4] == "HEAD"
+        then
+          return {
+            code = 0,
+            stdout = "ccccccc3\tnewest\n",
+            stderr = "",
+          }
+        end
+
+        return {
+          code = 1,
+          stdout = "",
+          stderr = "unexpected command",
+        }
+      end,
+    })
+
+    session.start_range = original_start_range
+    vim.g.git_review_range_picker_cancel_result = picker_result
+    vim.g.git_review_range_picker_cancel_active = session.is_active()
+  ]=])
+
+  local picker_result = child.lua_get([[vim.g.git_review_range_picker_cancel_result]])
+  local start_called = child.lua_get([[vim.g.git_review_range_picker_cancel_start_called == true]])
+  local is_active = child.lua_get([[vim.g.git_review_range_picker_cancel_active]])
+
+  assert(type(picker_result) == "table", "Expected cancel path result table")
+  assert(picker_result.state == "cancelled", "Expected cancel path to report cancelled state")
+  assert(start_called == false, "Expected cancel path to avoid start_range invocation")
+  assert(is_active == false, "Expected cancel path to keep session inactive")
+end
+
 set["session.start scheduled picker refresh does not target a newer session"] = function()
   child.lua([[package.loaded["git-review.session"] = nil]])
 
@@ -5705,6 +6374,680 @@ index 1111111..2222222 100644
 
   local fetch_calls = child.lua_get([[vim.g.git_review_stop_fetch_calls or 0]])
   assert(fetch_calls == 1, "Expected no thread refresh after session.stop")
+end
+
+set["session.start cleans previous owned range worktree before replacing session"] = function()
+  child.lua([[package.loaded["git-review.session"] = nil]])
+
+  child.lua([=[
+    local session = require("git-review.session")
+    vim.ui.select = nil
+
+    local commands = {}
+    local worktree_add_path = nil
+    local worktree_remove_path = nil
+
+    local function run_command(command)
+      table.insert(commands, command)
+
+      if type(command) == "table"
+        and command[1] == "git"
+        and command[2] == "rev-parse"
+        and command[3] == "--show-toplevel"
+      then
+        return {
+          code = 0,
+          stdout = vim.fn.getcwd() .. "\n",
+          stderr = "",
+        }
+      end
+
+      if type(command) == "table"
+        and command[1] == "git"
+        and command[2] == "rev-parse"
+        and command[3] == "HEAD"
+      then
+        return {
+          code = 0,
+          stdout = "range-head\n",
+          stderr = "",
+        }
+      end
+
+      if type(command) == "table"
+        and command[1] == "git"
+        and command[2] == "rev-parse"
+        and command[3] == "--verify"
+        and (command[4] == "base/head^{commit}" or command[4] == "feature/head^{commit}")
+      then
+        return {
+          code = 0,
+          stdout = "validated\n",
+          stderr = "",
+        }
+      end
+
+      if type(command) == "table"
+        and command[1] == "git"
+        and command[2] == "worktree"
+        and command[3] == "add"
+        and command[4] == "--detach"
+      then
+        worktree_add_path = command[5]
+        return {
+          code = 0,
+          stdout = "",
+          stderr = "",
+        }
+      end
+
+      if type(command) == "table"
+        and command[1] == "git"
+        and command[2] == "-C"
+        and type(command[3]) == "string"
+        and command[4] == "diff"
+        and command[5] == "--no-color"
+      then
+        return {
+          code = 0,
+          stdout = "",
+          stderr = "",
+        }
+      end
+
+      if type(command) == "table"
+        and command[1] == "git"
+        and command[2] == "worktree"
+        and command[3] == "remove"
+        and command[4] == "--force"
+      then
+        worktree_remove_path = command[5]
+        return {
+          code = 0,
+          stdout = "",
+          stderr = "",
+        }
+      end
+
+      if type(command) == "table"
+        and command[1] == "git"
+        and command[2] == "diff"
+        and command[3] == "--no-color"
+        and command[4] == "origin/main...HEAD"
+      then
+        return {
+          code = 0,
+          stdout = "",
+          stderr = "",
+        }
+      end
+
+      return {
+        code = 1,
+        stdout = "",
+        stderr = "unexpected command",
+      }
+    end
+
+    local start_range_result = session.start_range({
+      start_ref = "base/head",
+      end_ref = "feature/head",
+      run_command = run_command,
+      parse_diff = function(_)
+        return {}
+      end,
+      fetch_review_threads = function(_)
+        return {
+          state = "ok",
+          threads = {},
+        }
+      end,
+      panel = {
+        render = function(_) end,
+      },
+      repo = "acme/repo",
+      commit_id = "range-commit",
+      defer_thread_refresh = true,
+    })
+
+    local start_result = session.start({
+      run_command = run_command,
+      parse_diff = function(_)
+        return {}
+      end,
+      fetch_review_threads = function(_)
+        return {
+          state = "ok",
+          threads = {},
+        }
+      end,
+      panel = {
+        render = function(_) end,
+      },
+      diff_command = { "git", "diff", "--no-color", "origin/main...HEAD" },
+      repo_root = vim.fn.getcwd(),
+      repo = "acme/repo",
+      commit_id = "head-commit",
+      defer_thread_refresh = true,
+    })
+
+    local remove_index = nil
+    local start_diff_index = nil
+    for idx, command in ipairs(commands) do
+      if type(command) == "table"
+        and command[1] == "git"
+        and command[2] == "worktree"
+        and command[3] == "remove"
+      then
+        remove_index = idx
+      end
+
+      if type(command) == "table"
+        and command[1] == "git"
+        and command[2] == "diff"
+        and command[3] == "--no-color"
+        and command[4] == "origin/main...HEAD"
+      then
+        start_diff_index = idx
+      end
+    end
+
+    vim.g.git_review_start_cleanup_range_result = start_range_result
+    vim.g.git_review_start_cleanup_start_result = start_result
+    vim.g.git_review_start_cleanup_add_path = worktree_add_path
+    vim.g.git_review_start_cleanup_remove_path = worktree_remove_path
+    vim.g.git_review_start_cleanup_remove_index = remove_index
+    vim.g.git_review_start_cleanup_start_diff_index = start_diff_index
+  ]=])
+
+  local range_result = child.lua_get([[vim.g.git_review_start_cleanup_range_result]])
+  local start_result = child.lua_get([[vim.g.git_review_start_cleanup_start_result]])
+  local add_path = child.lua_get([[vim.g.git_review_start_cleanup_add_path]])
+  local remove_path = child.lua_get([[vim.g.git_review_start_cleanup_remove_path]])
+  local remove_index = child.lua_get([[vim.g.git_review_start_cleanup_remove_index]])
+  local start_diff_index = child.lua_get([[vim.g.git_review_start_cleanup_start_diff_index]])
+
+  assert(type(range_result) == "table" and type(range_result.hunks) == "table", "Expected range session start to succeed")
+  assert(type(start_result) == "table" and type(start_result.hunks) == "table", "Expected replacement start to succeed")
+  assert(type(add_path) == "string" and add_path ~= "", "Expected range start to create worktree path")
+  assert(remove_path == add_path, "Expected replacement start to clean up previous owned range worktree")
+  assert(type(remove_index) == "number", "Expected replacement start to issue worktree remove command")
+  assert(type(start_diff_index) == "number", "Expected replacement start to run its diff command")
+  assert(remove_index < start_diff_index, "Expected cleanup before replacement session starts")
+end
+
+set["session.refresh retains owned range worktree"] = function()
+  child.lua([[package.loaded["git-review.session"] = nil]])
+
+  child.lua([=[
+    local session = require("git-review.session")
+    vim.ui.select = nil
+
+    local commands = {}
+
+    local function run_command(command)
+      table.insert(commands, command)
+
+      if type(command) == "table"
+        and command[1] == "git"
+        and command[2] == "rev-parse"
+        and command[3] == "--show-toplevel"
+      then
+        return {
+          code = 0,
+          stdout = vim.fn.getcwd() .. "\n",
+          stderr = "",
+        }
+      end
+
+      if type(command) == "table"
+        and command[1] == "git"
+        and command[2] == "rev-parse"
+        and command[3] == "HEAD"
+      then
+        return {
+          code = 0,
+          stdout = "range-head\n",
+          stderr = "",
+        }
+      end
+
+      if type(command) == "table"
+        and command[1] == "git"
+        and command[2] == "rev-parse"
+        and command[3] == "--verify"
+        and (command[4] == "base/head^{commit}" or command[4] == "feature/head^{commit}")
+      then
+        return {
+          code = 0,
+          stdout = "validated\n",
+          stderr = "",
+        }
+      end
+
+      if type(command) == "table"
+        and command[1] == "git"
+        and command[2] == "worktree"
+        and command[3] == "add"
+        and command[4] == "--detach"
+      then
+        return {
+          code = 0,
+          stdout = "",
+          stderr = "",
+        }
+      end
+
+      if type(command) == "table"
+        and command[1] == "git"
+        and command[2] == "-C"
+        and type(command[3]) == "string"
+        and command[4] == "diff"
+        and command[5] == "--no-color"
+      then
+        return {
+          code = 0,
+          stdout = "",
+          stderr = "",
+        }
+      end
+
+      if type(command) == "table"
+        and command[1] == "git"
+        and command[2] == "worktree"
+        and command[3] == "remove"
+      then
+        return {
+          code = 0,
+          stdout = "",
+          stderr = "",
+        }
+      end
+
+      return {
+        code = 1,
+        stdout = "",
+        stderr = "unexpected command",
+      }
+    end
+
+    local start_result = session.start_range({
+      start_ref = "base/head",
+      end_ref = "feature/head",
+      run_command = run_command,
+      parse_diff = function(_)
+        return {}
+      end,
+      fetch_review_threads = function(_)
+        return {
+          state = "ok",
+          threads = {},
+        }
+      end,
+      panel = {
+        render = function(_) end,
+      },
+      repo = "acme/repo",
+      commit_id = "range-commit",
+      defer_thread_refresh = true,
+    })
+
+    local refresh_result = session.refresh()
+
+    local remove_count = 0
+    for _, command in ipairs(commands) do
+      if type(command) == "table"
+        and command[1] == "git"
+        and command[2] == "worktree"
+        and command[3] == "remove"
+      then
+        remove_count = remove_count + 1
+      end
+    end
+
+    vim.g.git_review_range_refresh_start_result = start_result
+    vim.g.git_review_range_refresh_result = refresh_result
+    vim.g.git_review_range_refresh_remove_count = remove_count
+  ]=])
+
+  local start_result = child.lua_get([[vim.g.git_review_range_refresh_start_result]])
+  local refresh_result = child.lua_get([[vim.g.git_review_range_refresh_result]])
+  local remove_count = child.lua_get([[vim.g.git_review_range_refresh_remove_count]])
+
+  assert(type(start_result) == "table" and type(start_result.hunks) == "table", "Expected range start to succeed before refresh")
+  assert(type(refresh_result) == "table", "Expected range refresh to return a result table")
+  assert(remove_count == 0, "Expected refresh to retain active owned range worktree")
+end
+
+set["session.stop removes owned range worktree"] = function()
+  child.lua([[package.loaded["git-review.session"] = nil]])
+
+  child.lua([=[
+    local session = require("git-review.session")
+    vim.ui.select = nil
+
+    local commands = {}
+    local worktree_add_path = nil
+    local worktree_remove_path = nil
+
+    local start_result = session.start_range({
+      start_ref = "base/head",
+      end_ref = "feature/head",
+      run_command = function(command)
+        table.insert(commands, command)
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "rev-parse"
+          and command[3] == "--show-toplevel"
+        then
+          return {
+            code = 0,
+            stdout = vim.fn.getcwd() .. "\n",
+            stderr = "",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "rev-parse"
+          and command[3] == "--verify"
+          and (command[4] == "base/head^{commit}" or command[4] == "feature/head^{commit}")
+        then
+          return {
+            code = 0,
+            stdout = "validated\n",
+            stderr = "",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "worktree"
+          and command[3] == "add"
+          and command[4] == "--detach"
+        then
+          worktree_add_path = command[5]
+          return {
+            code = 0,
+            stdout = "",
+            stderr = "",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "-C"
+          and type(command[3]) == "string"
+          and command[4] == "diff"
+          and command[5] == "--no-color"
+        then
+          return {
+            code = 0,
+            stdout = "",
+            stderr = "",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "worktree"
+          and command[3] == "remove"
+          and command[4] == "--force"
+        then
+          worktree_remove_path = command[5]
+          return {
+            code = 0,
+            stdout = "",
+            stderr = "",
+          }
+        end
+
+        return {
+          code = 1,
+          stdout = "",
+          stderr = "unexpected command",
+        }
+      end,
+      parse_diff = function(_)
+        return {}
+      end,
+      fetch_review_threads = function(_)
+        return {
+          state = "ok",
+          threads = {},
+        }
+      end,
+      panel = {
+        render = function(_) end,
+      },
+      defer_thread_refresh = true,
+    })
+
+    local stop_result = session.stop()
+
+    vim.g.git_review_stop_owned_worktree_start_result = start_result
+    vim.g.git_review_stop_owned_worktree_stop_result = stop_result
+    vim.g.git_review_stop_owned_worktree_worktree_add_path = worktree_add_path
+    vim.g.git_review_stop_owned_worktree_worktree_remove_path = worktree_remove_path
+    vim.g.git_review_stop_owned_worktree_commands = commands
+  ]=])
+
+  local start_result = child.lua_get([[vim.g.git_review_stop_owned_worktree_start_result]])
+  local stop_result = child.lua_get([[vim.g.git_review_stop_owned_worktree_stop_result]])
+  local add_path = child.lua_get([[vim.g.git_review_stop_owned_worktree_worktree_add_path]])
+  local remove_path = child.lua_get([[vim.g.git_review_stop_owned_worktree_worktree_remove_path]])
+  local commands = child.lua_get([[vim.g.git_review_stop_owned_worktree_commands]])
+
+  assert(type(start_result) == "table" and type(start_result.hunks) == "table", "Expected range session start to succeed")
+  assert(type(stop_result) == "table" and stop_result.state == "ok", "Expected stop success for owned worktree cleanup")
+  assert(type(add_path) == "string" and add_path ~= "", "Expected start_range to create detached worktree path")
+  assert(remove_path == add_path, "Expected stop to remove owned worktree path")
+
+  local remove_seen = false
+  for _, command in ipairs(commands or {}) do
+    if type(command) == "table" and command[1] == "git" and command[2] == "worktree" and command[3] == "remove" then
+      remove_seen = true
+      break
+    end
+  end
+
+  assert(remove_seen == true, "Expected stop to run git worktree remove for owned range session")
+end
+
+set["session.stop does not remove non-owned worktree path"] = function()
+  child.lua([[package.loaded["git-review.session"] = nil]])
+
+  child.lua([=[
+    local session = require("git-review.session")
+    vim.ui.select = nil
+
+    local commands = {}
+    local stop_result = nil
+    local start_result = session.start({
+      run_command = function(command)
+        table.insert(commands, command)
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "diff"
+          and command[3] == "--no-color"
+          and command[4] == "origin/main...HEAD"
+        then
+          return {
+            code = 0,
+            stdout = "",
+            stderr = "",
+          }
+        end
+
+        return {
+          code = 0,
+          stdout = "",
+          stderr = "",
+        }
+      end,
+      parse_diff = function(_)
+        return {}
+      end,
+      diff_command = { "git", "diff", "--no-color", "origin/main...HEAD" },
+      fetch_review_threads = function(_)
+        return {
+          state = "ok",
+          threads = {},
+        }
+      end,
+      panel = {
+        render = function(_) end,
+      },
+      worktree_path = "/tmp/non-owned-worktree",
+      worktree_owned = false,
+      defer_thread_refresh = true,
+    })
+
+    stop_result = session.stop()
+    vim.g.git_review_stop_non_owned_worktree_start_result = start_result
+    vim.g.git_review_stop_non_owned_worktree_stop_result = stop_result
+    vim.g.git_review_stop_non_owned_worktree_commands = commands
+  ]=])
+
+  local start_result = child.lua_get([[vim.g.git_review_stop_non_owned_worktree_start_result]])
+  local stop_result = child.lua_get([[vim.g.git_review_stop_non_owned_worktree_stop_result]])
+  local commands = child.lua_get([[vim.g.git_review_stop_non_owned_worktree_commands]])
+
+  assert(type(start_result) == "table" and type(start_result.hunks) == "table", "Expected explicit non-owned session start to succeed")
+  assert(type(stop_result) == "table" and stop_result.state == "ok", "Expected stop success for non-owned worktree session")
+
+  local remove_seen = false
+  for _, command in ipairs(commands or {}) do
+    if type(command) == "table" and command[1] == "git" and command[2] == "worktree" and command[3] == "remove" then
+      remove_seen = true
+      break
+    end
+  end
+
+  assert(remove_seen == false, "Expected stop to avoid removing non-owned worktree path")
+end
+
+set["session.stop reports actionable error when owned worktree cleanup fails"] = function()
+  child.lua([[package.loaded["git-review.session"] = nil]])
+
+  child.lua([=[
+    local session = require("git-review.session")
+    vim.ui.select = nil
+
+    local worktree_add_path = nil
+
+    local start_result = session.start_range({
+      start_ref = "base/head",
+      end_ref = "feature/head",
+      run_command = function(command)
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "rev-parse"
+          and command[3] == "--show-toplevel"
+        then
+          return {
+            code = 0,
+            stdout = vim.fn.getcwd() .. "\n",
+            stderr = "",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "rev-parse"
+          and command[3] == "--verify"
+          and (command[4] == "base/head^{commit}" or command[4] == "feature/head^{commit}")
+        then
+          return {
+            code = 0,
+            stdout = "validated\n",
+            stderr = "",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "worktree"
+          and command[3] == "add"
+          and command[4] == "--detach"
+        then
+          worktree_add_path = command[5]
+          return {
+            code = 0,
+            stdout = "",
+            stderr = "",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "-C"
+          and type(command[3]) == "string"
+          and command[4] == "diff"
+          and command[5] == "--no-color"
+        then
+          return {
+            code = 0,
+            stdout = "",
+            stderr = "",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "worktree"
+          and command[3] == "remove"
+          and command[4] == "--force"
+        then
+          return {
+            code = 1,
+            stdout = "",
+            stderr = "permission denied",
+          }
+        end
+
+        return {
+          code = 1,
+          stdout = "",
+          stderr = "unexpected command",
+        }
+      end,
+      parse_diff = function(_)
+        return {}
+      end,
+      fetch_review_threads = function(_)
+        return {
+          state = "ok",
+          threads = {},
+        }
+      end,
+      panel = {
+        render = function(_) end,
+      },
+      defer_thread_refresh = true,
+    })
+
+    local ok_stop, stop_result = pcall(session.stop)
+    vim.g.git_review_stop_owned_worktree_cleanup_fail_start_result = start_result
+    vim.g.git_review_stop_owned_worktree_cleanup_fail_ok = ok_stop
+    vim.g.git_review_stop_owned_worktree_cleanup_fail_result = stop_result
+    vim.g.git_review_stop_owned_worktree_cleanup_fail_path = worktree_add_path
+    vim.g.git_review_stop_owned_worktree_cleanup_fail_active = session.is_active()
+  ]=])
+
+  local start_result = child.lua_get([[vim.g.git_review_stop_owned_worktree_cleanup_fail_start_result]])
+  local ok_stop = child.lua_get([[vim.g.git_review_stop_owned_worktree_cleanup_fail_ok]])
+  local stop_result = child.lua_get([[vim.g.git_review_stop_owned_worktree_cleanup_fail_result]])
+  local worktree_path = child.lua_get([[vim.g.git_review_stop_owned_worktree_cleanup_fail_path]])
+  local is_active = child.lua_get([[vim.g.git_review_stop_owned_worktree_cleanup_fail_active]])
+
+  assert(type(start_result) == "table" and type(start_result.hunks) == "table", "Expected range session start to succeed before cleanup failure")
+  assert(ok_stop == true, "Expected stop to avoid crashing when worktree cleanup fails")
+  assert(type(stop_result) == "table" and stop_result.state == "command_error", "Expected stop to surface cleanup command_error")
+  assert(type(stop_result.message) == "string" and string.find(stop_result.message, "permission denied", 1, true), "Expected cleanup error detail in stop result")
+  assert(type(stop_result.message) == "string" and string.find(stop_result.message, worktree_path, 1, true), "Expected cleanup error to include worktree path")
+  assert(is_active == false, "Expected stop to clear active session even when cleanup fails")
 end
 
 set["session.stop is idempotent without active session"] = function()
