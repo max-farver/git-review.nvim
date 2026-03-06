@@ -15,6 +15,31 @@ local function is_valid_winid(winid)
   return type(winid) == "number" and vim.api.nvim_win_is_valid(winid)
 end
 
+local function maybe_ensure_mini_clue_triggers(bufnr)
+  if not is_valid_bufnr(bufnr) then
+    return
+  end
+
+  local ok_config, config = pcall(require, "git-review.config")
+  if not ok_config or type(config) ~= "table" or type(config.get) ~= "function" then
+    return
+  end
+
+  local cfg = config.get()
+  local integrations = type(cfg) == "table" and cfg.integrations or nil
+  local mini_clue = type(integrations) == "table" and integrations.mini_clue or nil
+  if type(mini_clue) ~= "table" or mini_clue.ensure_panel_triggers ~= true then
+    return
+  end
+
+  local ok_clue, clue = pcall(require, "mini.clue")
+  if not ok_clue or type(clue) ~= "table" or type(clue.ensure_buf_triggers) ~= "function" then
+    return
+  end
+
+  pcall(clue.ensure_buf_triggers, bufnr)
+end
+
 local function normalize_author(comment)
   if type(comment.author) == "string" and comment.author ~= "" then
     return comment.author
@@ -580,6 +605,7 @@ function M.render(threads, opts)
   vim.bo[bufnr].modifiable = false
 
   panel_state.thread_id_by_bufnr[bufnr] = model.thread_id_by_line
+  maybe_ensure_mini_clue_triggers(bufnr)
 
   return bufnr
 end

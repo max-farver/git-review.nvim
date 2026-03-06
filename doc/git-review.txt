@@ -160,6 +160,12 @@ git-review.nvim supports startup behavior options through |setup()|:
 `keymaps.visual`
     Visual-mode action suffix map. Default: comment="c".
 
+`integrations.mini_clue.ensure_panel_triggers` (default: false)
+    When true, `git-review.nvim` calls `require("mini.clue").ensure_buf_triggers(bufnr)`
+    after rendering the comments panel buffer. This is useful when mini.clue
+    trigger mappings are not automatically enabled for unlisted `nofile`
+    markdown buffers.
+
 Range-mode sessions are read-only regardless of keymaps. `:GitReview comment`,
 `:GitReview reply`, `:GitReview react`, and `:GitReview submit` are rejected in
 range mode.

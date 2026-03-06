@@ -530,6 +530,64 @@ set["panel.render writes to scratch buffer"] = function()
   assert(string.find(text, "Nit: extract helper.", 1, true), "Expected body to be rendered")
 end
 
+set["panel.render optionally ensures mini.clue triggers for panel buffer"] = function()
+  package.loaded["git-review.ui.panel"] = nil
+  package.loaded["git-review.config"] = nil
+  package.loaded["mini.clue"] = nil
+
+  local called_bufnr = nil
+  package.loaded["mini.clue"] = {
+    ensure_buf_triggers = function(bufnr)
+      called_bufnr = bufnr
+    end,
+  }
+
+  require("git-review.config").setup({
+    integrations = {
+      mini_clue = {
+        ensure_panel_triggers = true,
+      },
+    },
+  })
+
+  local panel = require("git-review.ui.panel")
+  local bufnr = vim.api.nvim_create_buf(false, true)
+  panel.render({
+    {
+      author = "hubot",
+      body = "Nit: sync key-hint triggers.",
+    },
+  }, { bufnr = bufnr })
+
+  assert(called_bufnr == bufnr, "Expected mini.clue.ensure_buf_triggers call for rendered panel buffer")
+end
+
+set["panel.render does not ensure mini.clue triggers by default"] = function()
+  package.loaded["git-review.ui.panel"] = nil
+  package.loaded["git-review.config"] = nil
+  package.loaded["mini.clue"] = nil
+
+  local call_count = 0
+  package.loaded["mini.clue"] = {
+    ensure_buf_triggers = function(_)
+      call_count = call_count + 1
+    end,
+  }
+
+  require("git-review.config").setup()
+
+  local panel = require("git-review.ui.panel")
+  local bufnr = vim.api.nvim_create_buf(false, true)
+  panel.render({
+    {
+      author = "hubot",
+      body = "Nit: keep defaults unchanged.",
+    },
+  }, { bufnr = bufnr })
+
+  assert(call_count == 0, "Expected default render path to skip mini.clue.ensure_buf_triggers")
+end
+
 set["panel.render_lines renders full thread comments as markdown"] = function()
   package.loaded["git-review.ui.panel"] = nil
   local panel = require("git-review.ui.panel")

@@ -44,6 +44,11 @@ M.defaults = {
       comment = "c",
     },
   },
+  integrations = {
+    mini_clue = {
+      ensure_panel_triggers = false,
+    },
+  },
 }
 
 local values = vim.deepcopy(M.defaults)
@@ -53,6 +58,8 @@ function M.setup(opts)
   local keymaps = opts.keymaps
   local keymaps_normal = keymaps and keymaps.normal
   local keymaps_visual = keymaps and keymaps.visual
+  local integrations = opts.integrations
+  local integrations_mini_clue = integrations and integrations.mini_clue
 
   vim.validate({
     opts = { opts, "table" },
@@ -94,6 +101,13 @@ function M.setup(opts)
       true,
     },
     keymaps_visual_comment = { type(keymaps_visual) == "table" and keymaps_visual.comment, is_keymap_action, true },
+    integrations = { integrations, "table", true },
+    integrations_mini_clue = { integrations_mini_clue, "table", true },
+    integrations_mini_clue_ensure_panel_triggers = {
+      type(integrations_mini_clue) == "table" and integrations_mini_clue.ensure_panel_triggers,
+      "boolean",
+      true,
+    },
   })
 
   values = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), opts)

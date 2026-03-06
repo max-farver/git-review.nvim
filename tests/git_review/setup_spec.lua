@@ -1062,6 +1062,12 @@ set["setup exposes default keymap config"] = function()
   assert(cfg.keymaps.normal.toggle_deletion_block == "b", "Expected default normal mode toggle_deletion_block key")
   assert(cfg.keymaps.normal.toggle_deletions == "d", "Expected default normal mode toggle_deletions key")
   assert(cfg.keymaps.visual.comment == "c", "Expected default visual mode comment key")
+  assert(type(cfg.integrations) == "table", "Expected integrations config table")
+  assert(type(cfg.integrations.mini_clue) == "table", "Expected mini_clue integration config table")
+  assert(
+    cfg.integrations.mini_clue.ensure_panel_triggers == false,
+    "Expected mini_clue panel trigger integration to be disabled by default"
+  )
 end
 
 set["setup merges keymap overrides and supports disable"] = function()
@@ -1075,6 +1081,19 @@ set["setup merges keymap overrides and supports disable"] = function()
   assert(cfg.keymaps.normal.stop == "x", "Expected normal mode stop key override")
   assert(cfg.keymaps.normal.panel == false, "Expected normal mode panel key override")
   assert(cfg.keymaps.normal.start == "o", "Expected default normal mode start key to remain")
+end
+
+set["setup merges integrations overrides"] = function()
+  child.lua([[package.loaded["git-review.config"] = nil]])
+  child.lua([[require("git-review").setup({ integrations = { mini_clue = { ensure_panel_triggers = true } } })]])
+
+  local cfg = child.lua_get([[require("git-review.config").get()]])
+  assert(type(cfg.integrations) == "table", "Expected integrations config table")
+  assert(type(cfg.integrations.mini_clue) == "table", "Expected mini_clue integration config table")
+  assert(
+    cfg.integrations.mini_clue.ensure_panel_triggers == true,
+    "Expected mini_clue ensure_panel_triggers override"
+  )
 end
 
 set["setup keymaps follow active-only lifecycle"] = function()
@@ -1669,6 +1688,27 @@ set["setup rejects invalid keymaps container types"] = function()
   assert(visual_result.ok == false, "Expected setup to reject non-table keymaps.visual")
   assert(type(visual_result.err) == "string", "Expected setup error message for invalid keymaps.visual")
   assert(string.find(visual_result.err, "keymaps_visual", 1, true), "Expected keymaps_visual validation error")
+
+  local integrations_result = child.lua_get([[(function()
+    local ok, err = pcall(require("git-review").setup, { integrations = "bad" })
+    return { ok = ok, err = err }
+  end)()]])
+
+  assert(integrations_result.ok == false, "Expected setup to reject non-table integrations")
+  assert(type(integrations_result.err) == "string", "Expected setup error message for invalid integrations")
+  assert(string.find(integrations_result.err, "integrations", 1, true), "Expected integrations validation error")
+
+  local mini_clue_result = child.lua_get([[(function()
+    local ok, err = pcall(require("git-review").setup, { integrations = { mini_clue = true } })
+    return { ok = ok, err = err }
+  end)()]])
+
+  assert(mini_clue_result.ok == false, "Expected setup to reject non-table integrations.mini_clue")
+  assert(type(mini_clue_result.err) == "string", "Expected setup error message for invalid integrations.mini_clue")
+  assert(
+    string.find(mini_clue_result.err, "integrations_mini_clue", 1, true),
+    "Expected integrations_mini_clue validation error"
+  )
 end
 
 set["repo fixture helper make_repo returns normalized repo table"] = function()

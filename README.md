@@ -143,6 +143,7 @@ Default keybinds (`keymaps.enabled = true`) use the prefix `<leader>gr`:
   - `toggle_resolved = "t"`, `toggle_deletion_block = "b"` (nearest block), `toggle_deletions = "d"` (buffer-wide toggle)
 - `keymaps.visual` action suffixes (defaults):
   - `comment = "c"`
+- `integrations.mini_clue.ensure_panel_triggers` (default: `false`) - when `true`, call `require("mini.clue").ensure_buf_triggers(bufnr)` after rendering the comments panel buffer. Useful when your mini.clue setup does not auto-enable triggers in unlisted `nofile` markdown buffers.
 
 In range mode, review sessions are read-only regardless of keymap configuration (`comment`, `reply`, `react`, and `submit` are rejected).
 
@@ -183,6 +184,11 @@ require("git-review").setup({
       comment = "c",
     },
   },
+  integrations = {
+    mini_clue = {
+      ensure_panel_triggers = false,
+    },
+  },
 })
 ```
 
@@ -204,6 +210,18 @@ require("git-review").setup({
     normal = {
       action = "a", -- use <leader>gra for context-aware comment/reply
       panel = false, -- disable the panel mapping
+    },
+  },
+})
+```
+
+If you use `mini.clue` and want panel hints in `GitReviewPanel`:
+
+```lua
+require("git-review").setup({
+  integrations = {
+    mini_clue = {
+      ensure_panel_triggers = true,
     },
   },
 })
