@@ -421,6 +421,109 @@ set["session.create_comment is blocked in range mode"] = function()
   assert(result.message == "create_comment is unsupported in range mode", "Expected deterministic range mode message")
 end
 
+set["session.create_comment is blocked in local mode"] = function()
+  child.lua([=[
+    local session = require("git-review.session")
+
+    session.start_local({
+      run_command = function(command)
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "rev-parse"
+          and command[3] == "--show-toplevel"
+        then
+          return {
+            code = 0,
+            stdout = vim.fn.getcwd() .. "\n",
+            stderr = "",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "config"
+          and command[3] == "--get"
+          and command[4] == "remote.origin.url"
+        then
+          return {
+            code = 1,
+            stdout = "",
+            stderr = "no remote",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "rev-parse"
+          and command[3] == "HEAD"
+        then
+          return {
+            code = 0,
+            stdout = "abc123\n",
+            stderr = "",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "diff"
+          and command[3] == "--no-color"
+          and command[4] == "HEAD"
+        then
+          return {
+            code = 0,
+            stdout = "",
+            stderr = "",
+          }
+        end
+
+        return {
+          code = 0,
+          stdout = "",
+          stderr = "",
+        }
+      end,
+      parse_diff = function(_)
+        return {}
+      end,
+      fetch_review_threads = function(_)
+        return {
+          state = "ok",
+          threads = {},
+        }
+      end,
+      panel = {
+        render = function(_) end,
+      },
+      defer_thread_refresh = true,
+    })
+
+    vim.g.git_review_local_create_comment_result = session.create_comment({
+      body = "local mode blocked",
+      context = {
+        path = "README.md",
+        start_line = 1,
+        end_line = 1,
+      },
+      diff_text = "diff --git a/README.md b/README.md",
+      repo = "acme/repo",
+      pr_number = 42,
+      commit_id = "abc123",
+      create_review_comment = function(_)
+        return {
+          state = "ok",
+        }
+      end,
+    })
+  ]=])
+
+  local result = child.lua_get([[vim.g.git_review_local_create_comment_result]])
+
+  assert(type(result) == "table", "Expected create_comment local-mode result table")
+  assert(result.state == "unsupported_in_range_mode", "Expected local mode to block create_comment")
+  assert(result.message == "create_comment is unsupported in local mode", "Expected deterministic local mode message")
+end
+
 set["session.create_comment remains blocked in range mode after refresh"] = function()
   child.lua([=[
     local session = require("git-review.session")

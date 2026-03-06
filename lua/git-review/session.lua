@@ -1355,11 +1355,16 @@ local function open_review_quickfix_preserving_focus()
   end
 end
 
-local function range_mode_unsupported(action_name)
-  if type(current_session) == "table" and current_session.mode == "range" then
+local function readonly_mode_unsupported(action_name)
+  if type(current_session) ~= "table" then
+    return nil
+  end
+
+  local mode = current_session.mode
+  if mode == "range" or mode == "local" or mode == "branch" then
     return {
       state = "unsupported_in_range_mode",
-      message = action_name .. " is unsupported in range mode",
+      message = action_name .. " is unsupported in " .. mode .. " mode",
     }
   end
 
@@ -1702,6 +1707,61 @@ function M.start(opts)
     thread_state = current_session.thread_state and current_session.thread_state.state,
     thread_message = current_session.thread_state and current_session.thread_state.message,
   }
+end
+
+function M.start_local(opts)
+  opts = opts or {}
+  vim.validate({
+    opts = { opts, "table" },
+  })
+
+  local local_opts = vim.deepcopy(opts)
+  if local_opts.diff_command == nil then
+    local_opts.diff_command = { "git", "diff", "--no-color", "HEAD" }
+  end
+
+  if local_opts.mode == nil then
+    local_opts.mode = "local"
+  end
+
+  return M.start(local_opts)
+end
+
+function M.start_branch(opts)
+  opts = opts or {}
+  vim.validate({
+    opts = { opts, "table" },
+    base_ref = { opts.base_ref, "string" },
+    head_ref = { opts.head_ref, "string", true },
+  })
+
+  local run_command = opts.run_command or require("git-review.system").run
+  local head_ref = opts.head_ref or "HEAD"
+
+  local _, base_ref_error = validate_commit_ref(run_command, opts.base_ref, "base")
+  if base_ref_error ~= nil then
+    return {
+      state = "command_error",
+      message = base_ref_error,
+    }
+  end
+
+  local _, head_ref_error = validate_commit_ref(run_command, head_ref, "head")
+  if head_ref_error ~= nil then
+    return {
+      state = "command_error",
+      message = head_ref_error,
+    }
+  end
+
+  local branch_opts = vim.deepcopy(opts)
+  branch_opts.diff_command = branch_opts.diff_command
+    or { "git", "diff", "--no-color", opts.base_ref .. "..." .. head_ref }
+  branch_opts.mode = branch_opts.mode or "branch"
+  branch_opts.base_ref = nil
+  branch_opts.head_ref = nil
+
+  return M.start(branch_opts)
 end
 
 function M.start_range(opts)
@@ -2483,7 +2543,7 @@ function M.submit_review(opts)
     opts = { opts, "table" },
   })
 
-  local range_mode_state = range_mode_unsupported("submit_review")
+  local range_mode_state = readonly_mode_unsupported("submit_review")
   if range_mode_state ~= nil then
     return range_mode_state
   end
@@ -2553,7 +2613,7 @@ end
 
 function M.create_comment(opts)
   opts = opts or {}
-  local range_mode_state = range_mode_unsupported("create_comment")
+  local range_mode_state = readonly_mode_unsupported("create_comment")
   if range_mode_state ~= nil then
     return range_mode_state
   end
@@ -2675,7 +2735,7 @@ function M.reply_to_selected_thread(opts)
     opts = { opts, "table" },
   })
 
-  local range_mode_state = range_mode_unsupported("reply_to_selected_thread")
+  local range_mode_state = readonly_mode_unsupported("reply_to_selected_thread")
   if range_mode_state ~= nil then
     return range_mode_state
   end
@@ -2740,7 +2800,7 @@ function M.react_to_selected_thread(opts)
     opts = { opts, "table" },
   })
 
-  local range_mode_state = range_mode_unsupported("react_to_selected_thread")
+  local range_mode_state = readonly_mode_unsupported("react_to_selected_thread")
   if range_mode_state ~= nil then
     return range_mode_state
   end

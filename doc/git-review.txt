@@ -1,8 +1,9 @@
 *git-review.txt*   Review pull requests from Neovim
 
-git-review.nvim is a local-first pull request review plugin for Neovim. It builds
-a quickfix list of changed files plus a location list of hunks for the selected
-file and uses GitHub CLI for review thread actions.
+git-review.nvim is a local-first pull request and diff review plugin for Neovim.
+It builds a quickfix list of changed files plus a location list of hunks for the
+selected file and uses GitHub CLI for review thread actions when a PR is
+available.
 
 ==============================================================================
 CONTENTS                                                        *git-review*
@@ -17,7 +18,7 @@ CONTENTS                                                        *git-review*
 
 - Neovim 0.9+
 - git
-- GitHub CLI (`gh`) with valid authentication
+- GitHub CLI (`gh`) with valid authentication for PR thread/comment actions
 
 ==============================================================================
 2. COMMANDS                                                 *git-review-commands*
@@ -32,13 +33,21 @@ CONTENTS                                                        *git-review*
       startup-cached hunk data when available). Keeps comments panel closed by
       default and enables review hunk highlighting in file buffers.
 
+    local
+      Start a read-only local working-tree review using `git diff HEAD`.
+
+    branch {base} [{head}]
+      Start a read-only branch/ref review using `{base}...{head}`.
+      `{head}` defaults to `HEAD` when omitted.
+
     range
       Start a read-only commit-range session.
       Like `:GitReview start`, this is available when review mode is inactive.
       `:GitReview range` opens a two-step picker (end commit first, then start)
       and reviews `start...end`.
       `:GitReview range {start} {end}` starts the same range directly.
-      In range mode, mutating actions (comment/reply/react/submit) are rejected.
+      In range/local/branch modes, mutating actions
+      (comment/reply/react/submit) are rejected.
 
     files
       Populate the review quickfix list with one entry per changed file.
@@ -166,9 +175,9 @@ git-review.nvim supports startup behavior options through |setup()|:
     trigger mappings are not automatically enabled for unlisted `nofile`
     markdown buffers.
 
-Range-mode sessions are read-only regardless of keymaps. `:GitReview comment`,
-`:GitReview reply`, `:GitReview react`, and `:GitReview submit` are rejected in
-range mode.
+Range/local/branch sessions are read-only regardless of keymaps.
+`:GitReview comment`, `:GitReview reply`, `:GitReview react`, and
+`:GitReview submit` are rejected in these modes.
 
 Disable all default keymaps (opt-out):
 >
@@ -192,8 +201,9 @@ Override one action and disable another:
 
 1. Checkout the branch under review.
 2. Run `:GitReview start` and choose a file from the picker, or run
-   `:GitReview range` (picker) / `:GitReview range {start} {end}` for commit-
-   range review.
+   `:GitReview local`, `:GitReview branch {base} [{head}]`, or
+   `:GitReview range` (picker) / `:GitReview range {start} {end}` for
+   read-only non-PR review flows.
 3. Navigate hunks with loclist commands like `:lnext` and `:lprev`.
    Changed lines are highlighted in file buffers using semantic diff groups.
    Deleted lines render as ghost blocks above anchor lines in preview mode
@@ -208,7 +218,7 @@ Override one action and disable another:
 7. Reply to selected threads with `:GitReview reply`.
 8. Optional: react to selected threads with `:GitReview react`.
 9. Optional: submit with `:GitReview submit`.
-   (Range mode is read-only: steps 6-9 are unavailable there.)
+   (Range/local/branch modes are read-only: steps 6-9 are unavailable there.)
 10. Run `:GitReview stop` when review is complete.
 
 With default keymaps enabled, git-review.nvim maps these actions using

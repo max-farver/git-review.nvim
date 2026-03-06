@@ -1,15 +1,15 @@
 # git-review.nvim
 
-`git-review.nvim` is a Neovim plugin for pull-request review using your local checkout.
+`git-review.nvim` is a Neovim plugin for pull-request and local/branch diff review using your local checkout.
 It builds a quickfix list of changed files plus a location list of hunks for the selected file,
 keeps review navigation in normal file buffers,
-and uses GitHub CLI (`gh`) for thread lookup and comment/reply actions.
+and uses GitHub CLI (`gh`) for thread lookup and comment/reply actions when a PR is available.
 
 ## Requirements
 
 - Neovim 0.9+
 - `git`
-- `gh` with an authenticated session (`gh auth status`)
+- `gh` with an authenticated session (`gh auth status`) for PR thread/comment actions
 
 ## Install
 
@@ -45,9 +45,11 @@ The plugin bootstrap auto-registers commands during startup.
 
 ## Usage
 
-Run `:GitReview <subcommand>` from a branch that has a pull request:
+Run `:GitReview <subcommand>`:
 
-- `:GitReview start` - open a file picker for changed files, seed the current window location list with hunks after selection (using startup-cached hunk data when available), keep comments panel closed by default, and enable hunk highlights in file buffers.
+- `:GitReview start` - start review for the current branch (PR-aware when available); opens a file picker for changed files, seeds the current window location list with hunks after selection (using startup-cached hunk data when available), keeps comments panel closed by default, and enables hunk highlights in file buffers.
+- `:GitReview local` - start a local working-tree review (`git diff HEAD`) for uncommitted tracked changes.
+- `:GitReview branch <base> [<head>]` - start a branch/ref review for `<base>...<head>` (`HEAD` when omitted).
 - `:GitReview range` - open a two-step commit picker (end first, then start) and start a commit-range review session for `start...end` (available when review is inactive, like `:GitReview start`).
 - `:GitReview range <start> <end>` - start a commit-range review session directly for `start...end`.
 - `:GitReview files` - populate the review quickfix list with changed files without opening the window.
@@ -66,7 +68,7 @@ Run `:GitReview <subcommand>` from a branch that has a pull request:
 - `:GitReview submit` - submit a review; prompts for `APPROVE` or `REQUEST_CHANGES`, then an optional message body.
 - `:GitReview stop` - stop review mode, clear active/passive/deletion highlights, and clear review quickfix and review hunk location list items.
 
-Range sessions are read-only: mutating actions (`:GitReview comment`, `:GitReview reply`, `:GitReview react`, and `:GitReview submit`) are rejected in range mode.
+Range/local/branch sessions are read-only: mutating actions (`:GitReview comment`, `:GitReview reply`, `:GitReview react`, and `:GitReview submit`) are rejected in these modes.
 
 While review mode is active, use location list (`:lnext` / `:lprev`) to move between
 hunks in the selected file. Run `:GitReview files` when you want quickfix navigation,
@@ -92,7 +94,7 @@ panel.
 
 Typical flow:
 
-1. `:GitReview start`
+1. `:GitReview start` (or `:GitReview local` / `:GitReview branch <base> [<head>]`)
 2. Pick a file from the picker to seed the hunk loclist
 3. Jump between hunks with `:lnext` / `:lprev`
 4. Optional: run `:GitReview files` then `:cnext` / `:cprev` to move between files
@@ -145,7 +147,7 @@ Default keybinds (`keymaps.enabled = true`) use the prefix `<leader>gr`:
   - `comment = "c"`
 - `integrations.mini_clue.ensure_panel_triggers` (default: `false`) - when `true`, call `require("mini.clue").ensure_buf_triggers(bufnr)` after rendering the comments panel buffer. Useful when your mini.clue setup does not auto-enable triggers in unlisted `nofile` markdown buffers.
 
-In range mode, review sessions are read-only regardless of keymap configuration (`comment`, `reply`, `react`, and `submit` are rejected).
+In range/local/branch modes, review sessions are read-only regardless of keymap configuration (`comment`, `reply`, `react`, and `submit` are rejected).
 
 Example:
 

@@ -20,6 +20,8 @@ local ACTIVE_SUBCOMMANDS = {
 
 local INACTIVE_SUBCOMMANDS = {
   "start",
+  "local",
+  "branch",
   "range",
 }
 
@@ -536,6 +538,34 @@ local function run_start_action()
   return false
 end
 
+local function run_local_action()
+  local success = run_start_like_command("GitReviewLocal", function()
+    return require("git-review.session").start_local()
+  end)
+  if success then
+    register_active_keymaps()
+    return true
+  end
+
+  return false
+end
+
+local function run_branch_action(base_ref, head_ref, command_opts)
+  local success = run_start_like_command("GitReviewBranch", function()
+    return require("git-review.session").start_branch({
+      base_ref = base_ref,
+      head_ref = head_ref,
+      command_opts = command_opts,
+    })
+  end)
+  if success then
+    register_active_keymaps()
+    return true
+  end
+
+  return false
+end
+
 load_session_or_notify = function(context)
   local ok, session_or_err = pcall(require, "git-review.session")
   if ok then
@@ -657,6 +687,16 @@ local function run_dispatcher(command_opts)
     return
   end
 
+  if subcommand == "local" then
+    if #args > 1 then
+      vim.notify("GitReview: subcommand 'local' does not accept arguments. Usage: :GitReview local", vim.log.levels.ERROR)
+      return
+    end
+
+    run_local_action()
+    return
+  end
+
   local session = load_session_or_notify("dispatcher")
   if session == nil then
     return
@@ -665,6 +705,16 @@ local function run_dispatcher(command_opts)
   local is_active = reconcile_active_keymaps(session)
 
   if not is_active then
+    if subcommand == "branch" then
+      if #args == 2 or #args == 3 then
+        run_branch_action(args[2], args[3], command_opts)
+        return
+      end
+
+      vim.notify("GitReview: subcommand 'branch' expects a base ref and optional head ref. Usage: :GitReview branch <base> [<head>]", vim.log.levels.ERROR)
+      return
+    end
+
     if subcommand == "range" then
       if #args == 1 then
         local ok_picker, picker_result = pcall(session.start_range_picker, {

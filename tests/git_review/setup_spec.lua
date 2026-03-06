@@ -329,6 +329,8 @@ set["GitReview dispatcher completion is session-state aware"] = function()
       inactive = inactive,
       active = active,
       inactive_has_start = has(inactive, "start"),
+      inactive_has_local = has(inactive, "local"),
+      inactive_has_branch = has(inactive, "branch"),
       inactive_has_range = has(inactive, "range"),
       active_has_stop = has(active, "stop"),
       active_has_comment = has(active, "comment"),
@@ -337,8 +339,10 @@ set["GitReview dispatcher completion is session-state aware"] = function()
     }
   end)()]=])
 
-  assert(type(completion_state.inactive) == "table" and #completion_state.inactive == 2, "Expected inactive completion to suggest start and range")
+  assert(type(completion_state.inactive) == "table" and #completion_state.inactive == 4, "Expected inactive completion to suggest start/local/branch/range")
   assert(completion_state.inactive_has_start == true, "Expected inactive completion to include start")
+  assert(completion_state.inactive_has_local == true, "Expected inactive completion to include local")
+  assert(completion_state.inactive_has_branch == true, "Expected inactive completion to include branch")
   assert(completion_state.inactive_has_range == true, "Expected inactive completion to include range")
   assert(completion_state.active_has_stop == true, "Expected active completion to include stop")
   assert(completion_state.active_has_comment == true, "Expected active completion to include comment")
@@ -445,12 +449,12 @@ set["GitReview dispatcher gates inactive commands and reports actionable errors"
   assert(notifications[1].message == "Review not active. Run :GitReview start", "Expected actionable inactive review message")
   assert(type(notifications[2]) == "table", "Expected missing subcommand notification")
   assert(
-    string.find(notifications[2].message or "", "Valid subcommands: start|range", 1, true),
+    string.find(notifications[2].message or "", "Valid subcommands: start|local|branch|range", 1, true),
     "Expected missing subcommand message to list inactive valid subcommands"
   )
   assert(type(notifications[3]) == "table", "Expected unknown inactive subcommand notification")
   assert(
-    string.find(notifications[3].message or "", "Valid subcommands: start|range", 1, true),
+    string.find(notifications[3].message or "", "Valid subcommands: start|local|branch|range", 1, true),
     "Expected unknown inactive subcommand message to list inactive valid subcommands"
   )
   assert(type(notifications[4]) == "table", "Expected unknown active subcommand notification")
@@ -525,6 +529,76 @@ set["GitReview dispatcher routes range subcommand variants while inactive"] = fu
   assert(result.range_opts.end_ref == "feature/head", "Expected end_ref to be forwarded")
   assert(result.has_active_map == true, "Expected successful range path to register active keymaps")
   assert(type(result.notifications) == "table" and #result.notifications == 0, "Expected no dispatcher notifications for valid range commands")
+end
+
+set["GitReview dispatcher routes local and branch subcommands while inactive"] = function()
+  local result = child.lua_get([=[(function()
+    package.loaded["git-review.session"] = {
+      is_active = function()
+        return vim.g.git_review_setup_dispatcher_active == true
+      end,
+      start_local = function(_)
+        vim.g.git_review_setup_dispatcher_local_calls = (vim.g.git_review_setup_dispatcher_local_calls or 0) + 1
+        vim.g.git_review_setup_dispatcher_active = true
+        return { hunks = {} }
+      end,
+      start_branch = function(opts)
+        vim.g.git_review_setup_dispatcher_branch_calls = (vim.g.git_review_setup_dispatcher_branch_calls or 0) + 1
+        vim.g.git_review_setup_dispatcher_branch_opts = opts
+        vim.g.git_review_setup_dispatcher_active = true
+        return { hunks = {} }
+      end,
+      stop = function()
+        vim.g.git_review_setup_dispatcher_active = false
+        return { state = "ok" }
+      end,
+    }
+
+    local notifications = {}
+    local original_notify = vim.notify
+    vim.notify = function(message, level)
+      table.insert(notifications, {
+        message = message,
+        level = level,
+      })
+    end
+
+    require("git-review").setup()
+
+    vim.g.git_review_setup_dispatcher_active = false
+    vim.cmd("GitReview local")
+    local active_after_local = vim.g.git_review_setup_dispatcher_active == true
+    vim.cmd("GitReview stop")
+
+    vim.cmd("GitReview branch main")
+    local branch_opts_single = vim.g.git_review_setup_dispatcher_branch_opts
+    vim.cmd("GitReview stop")
+
+    vim.cmd("GitReview branch main feature/topic")
+    local branch_opts_double = vim.g.git_review_setup_dispatcher_branch_opts
+
+    vim.notify = original_notify
+
+    return {
+      local_calls = vim.g.git_review_setup_dispatcher_local_calls or 0,
+      branch_calls = vim.g.git_review_setup_dispatcher_branch_calls or 0,
+      active_after_local = active_after_local,
+      branch_opts_single = branch_opts_single,
+      branch_opts_double = branch_opts_double,
+      notifications = notifications,
+    }
+  end)()]=])
+
+  assert(result.local_calls == 1, "Expected :GitReview local to call session.start_local")
+  assert(result.branch_calls == 2, "Expected :GitReview branch to call session.start_branch")
+  assert(result.active_after_local == true, "Expected local path to activate session")
+  assert(type(result.branch_opts_single) == "table", "Expected single-ref branch command to forward opts")
+  assert(result.branch_opts_single.base_ref == "main", "Expected branch base ref to be forwarded")
+  assert(result.branch_opts_single.head_ref == nil, "Expected optional branch head ref to default when omitted")
+  assert(type(result.branch_opts_double) == "table", "Expected two-ref branch command to forward opts")
+  assert(result.branch_opts_double.base_ref == "main", "Expected branch base ref with explicit head")
+  assert(result.branch_opts_double.head_ref == "feature/topic", "Expected branch head ref to be forwarded")
+  assert(type(result.notifications) == "table" and #result.notifications == 0, "Expected no notifications for valid local/branch commands")
 end
 
 set["GitReview dispatcher handles range picker cancel without activating session"] = function()

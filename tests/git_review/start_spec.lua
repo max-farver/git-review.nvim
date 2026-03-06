@@ -7050,6 +7050,272 @@ set["session.stop reports actionable error when owned worktree cleanup fails"] =
   assert(is_active == false, "Expected stop to clear active session even when cleanup fails")
 end
 
+set["session.start_local defaults to git diff HEAD and local mode"] = function()
+  child.lua([[package.loaded["git-review.session"] = nil]])
+
+  child.lua([=[
+    local session = require("git-review.session")
+    vim.ui.select = nil
+
+    local commands = {}
+    local start_result = session.start_local({
+      run_command = function(command)
+        table.insert(commands, command)
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "rev-parse"
+          and command[3] == "--show-toplevel"
+        then
+          return {
+            code = 0,
+            stdout = vim.fn.getcwd() .. "\n",
+            stderr = "",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "config"
+          and command[3] == "--get"
+          and command[4] == "remote.origin.url"
+        then
+          return {
+            code = 1,
+            stdout = "",
+            stderr = "no remote",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "rev-parse"
+          and command[3] == "HEAD"
+        then
+          return {
+            code = 0,
+            stdout = "abc123\n",
+            stderr = "",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "diff"
+          and command[3] == "--no-color"
+          and command[4] == "HEAD"
+        then
+          return {
+            code = 0,
+            stdout = "",
+            stderr = "",
+          }
+        end
+
+        return {
+          code = 0,
+          stdout = "",
+          stderr = "",
+        }
+      end,
+      parse_diff = function(_)
+        return {}
+      end,
+      fetch_review_threads = function(_)
+        return {
+          state = "ok",
+          threads = {},
+        }
+      end,
+      panel = {
+        render = function(_) end,
+      },
+      defer_thread_refresh = true,
+    })
+
+    local mode = nil
+    for idx = 1, 30 do
+      local upvalue_name, upvalue_value = debug.getupvalue(session.start, idx)
+      if upvalue_name == nil then
+        break
+      end
+
+      if upvalue_name == "current_session" and type(upvalue_value) == "table" then
+        mode = upvalue_value.mode
+        break
+      end
+    end
+
+    vim.g.git_review_start_local_result = start_result
+    vim.g.git_review_start_local_commands = commands
+    vim.g.git_review_start_local_mode = mode
+  ]=])
+
+  local result = child.lua_get([[vim.g.git_review_start_local_result]])
+  local commands = child.lua_get([[vim.g.git_review_start_local_commands]])
+  local mode = child.lua_get([[vim.g.git_review_start_local_mode]])
+
+  assert(type(result) == "table" and type(result.hunks) == "table", "Expected start_local to return start result")
+  assert(mode == "local", "Expected session mode to be local")
+
+  local diff_seen = false
+  for _, command in ipairs(commands or {}) do
+    if type(command) == "table" and command[1] == "git" and command[2] == "diff" then
+      diff_seen = command[3] == "--no-color" and command[4] == "HEAD"
+      if diff_seen then
+        break
+      end
+    end
+  end
+
+  assert(diff_seen == true, "Expected start_local default diff command to be git diff --no-color HEAD")
+end
+
+set["session.start_branch validates refs and builds branch diff command"] = function()
+  child.lua([[package.loaded["git-review.session"] = nil]])
+
+  child.lua([=[
+    local session = require("git-review.session")
+    vim.ui.select = nil
+
+    local commands = {}
+    local start_result = session.start_branch({
+      base_ref = "main",
+      head_ref = "feature/topic",
+      run_command = function(command)
+        table.insert(commands, command)
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "rev-parse"
+          and command[3] == "--show-toplevel"
+        then
+          return {
+            code = 0,
+            stdout = vim.fn.getcwd() .. "\n",
+            stderr = "",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "rev-parse"
+          and command[3] == "--verify"
+          and (command[4] == "main^{commit}" or command[4] == "feature/topic^{commit}")
+        then
+          return {
+            code = 0,
+            stdout = "validated\n",
+            stderr = "",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "config"
+          and command[3] == "--get"
+          and command[4] == "remote.origin.url"
+        then
+          return {
+            code = 1,
+            stdout = "",
+            stderr = "no remote",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "rev-parse"
+          and command[3] == "HEAD"
+        then
+          return {
+            code = 0,
+            stdout = "abc123\n",
+            stderr = "",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "diff"
+          and command[3] == "--no-color"
+          and command[4] == "main...feature/topic"
+        then
+          return {
+            code = 0,
+            stdout = "",
+            stderr = "",
+          }
+        end
+
+        return {
+          code = 0,
+          stdout = "",
+          stderr = "",
+        }
+      end,
+      parse_diff = function(_)
+        return {}
+      end,
+      fetch_review_threads = function(_)
+        return {
+          state = "ok",
+          threads = {},
+        }
+      end,
+      panel = {
+        render = function(_) end,
+      },
+      defer_thread_refresh = true,
+    })
+
+    local mode = nil
+    for idx = 1, 30 do
+      local upvalue_name, upvalue_value = debug.getupvalue(session.start, idx)
+      if upvalue_name == nil then
+        break
+      end
+
+      if upvalue_name == "current_session" and type(upvalue_value) == "table" then
+        mode = upvalue_value.mode
+        break
+      end
+    end
+
+    vim.g.git_review_start_branch_result = start_result
+    vim.g.git_review_start_branch_commands = commands
+    vim.g.git_review_start_branch_mode = mode
+  ]=])
+
+  local result = child.lua_get([[vim.g.git_review_start_branch_result]])
+  local commands = child.lua_get([[vim.g.git_review_start_branch_commands]])
+  local mode = child.lua_get([[vim.g.git_review_start_branch_mode]])
+
+  assert(type(result) == "table" and type(result.hunks) == "table", "Expected start_branch to return start result")
+  assert(mode == "branch", "Expected session mode to be branch")
+
+  local validate_base_seen = false
+  local validate_head_seen = false
+  local diff_seen = false
+  for _, command in ipairs(commands or {}) do
+    if type(command) == "table" and command[1] == "git" and command[2] == "rev-parse" and command[3] == "--verify" then
+      if command[4] == "main^{commit}" then
+        validate_base_seen = true
+      elseif command[4] == "feature/topic^{commit}" then
+        validate_head_seen = true
+      end
+    end
+
+    if type(command) == "table" and command[1] == "git" and command[2] == "diff" then
+      diff_seen = command[3] == "--no-color" and command[4] == "main...feature/topic"
+    end
+  end
+
+  assert(validate_base_seen == true, "Expected start_branch to validate base ref")
+  assert(validate_head_seen == true, "Expected start_branch to validate head ref")
+  assert(diff_seen == true, "Expected start_branch diff command to use base...head")
+end
+
 set["session.stop is idempotent without active session"] = function()
   child.lua([[
     local session = require("git-review.session")
