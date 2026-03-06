@@ -391,4 +391,78 @@ set["submit_review returns parse_error for non-object JSON"] = function()
   assert(result.message == "gh api submit review returned non-object JSON", "Expected parse error message")
 end
 
+set["add_thread_reaction assembles GraphQL request payload"] = function()
+  local github = require("git-review.github")
+  local captured_request
+
+  local result = github.add_thread_reaction("PRRT_kwDOAA", "👍", function(request)
+    captured_request = request
+    return {
+      code = 0,
+      stdout = [[{"data":{"addReaction":{"reaction":{"content":"THUMBS_UP"},"subject":{"id":"PRRT_kwDOAA"}}}}]],
+      stderr = "",
+    }
+  end)
+
+  assert(type(captured_request) == "table", "Expected request table")
+  assert(captured_request.method == "POST", "Expected POST request")
+  assert(captured_request.path == "graphql", "Expected GraphQL API path")
+  assert(type(captured_request.body) == "table", "Expected GraphQL request body")
+  assert(type(captured_request.body.query) == "string", "Expected GraphQL mutation query")
+  assert(string.find(captured_request.body.query, "addReaction", 1, true), "Expected addReaction mutation")
+  assert(captured_request.body.variables.input.subjectId == "PRRT_kwDOAA", "Expected thread id variable")
+  assert(captured_request.body.variables.input.content == "THUMBS_UP", "Expected normalized reaction variable")
+
+  assert(result.state == "ok", "Expected ok state")
+  assert(type(result.reaction) == "table", "Expected reaction payload")
+  assert(result.reaction.reaction.content == "THUMBS_UP", "Expected parsed reaction content")
+end
+
+set["add_thread_reaction returns command_error on gh failure"] = function()
+  local github = require("git-review.github")
+
+  local result = github.add_thread_reaction("PRRT_kwDOAA", "THUMBS_DOWN", function(_)
+    return {
+      code = 1,
+      stdout = "",
+      stderr = "gh: validation failed",
+    }
+  end)
+
+  assert(result.state == "command_error", "Expected command_error state")
+  assert(result.message == "gh: validation failed", "Expected command failure message")
+end
+
+set["add_thread_reaction returns parse_error for invalid payload"] = function()
+  local github = require("git-review.github")
+
+  local result = github.add_thread_reaction("PRRT_kwDOAA", "EYES", function(_)
+    return {
+      code = 0,
+      stdout = [[{"data":{}}]],
+      stderr = "",
+    }
+  end)
+
+  assert(result.state == "parse_error", "Expected parse_error state")
+  assert(result.message == "gh api add reaction returned invalid payload", "Expected parse error message")
+end
+
+set["add_thread_reaction validates reaction content"] = function()
+  local github = require("git-review.github")
+
+  local ok, err = pcall(function()
+    github.add_thread_reaction("PRRT_kwDOAA", "NOPE", function(_)
+      return {
+        code = 0,
+        stdout = "",
+        stderr = "",
+      }
+    end)
+  end)
+
+  assert(ok == false, "Expected invalid reaction content to error")
+  assert(type(err) == "string" and string.find(err, "reaction content", 1, true), "Expected reaction validation error")
+end
+
 return set

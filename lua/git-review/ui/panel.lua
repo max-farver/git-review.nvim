@@ -315,6 +315,74 @@ local function resolve_show_resolved_bodies(opts, fallback)
   return fallback
 end
 
+local REACTION_DISPLAY_BY_CONTENT = {
+  THUMBS_UP = "👍",
+  THUMBS_DOWN = "👎",
+  LAUGH = "😄",
+  HOORAY = "🎉",
+  CONFUSED = "😕",
+  HEART = "❤️",
+  ROCKET = "🚀",
+  EYES = "👀",
+}
+
+local REACTION_ORDER = {
+  "THUMBS_UP",
+  "THUMBS_DOWN",
+  "LAUGH",
+  "HOORAY",
+  "CONFUSED",
+  "HEART",
+  "ROCKET",
+  "EYES",
+}
+
+local function summarize_reactions(comment)
+  if type(comment) ~= "table" then
+    return nil
+  end
+
+  local counts = {}
+
+  if type(comment.reactionGroups) == "table" then
+    for _, group in ipairs(comment.reactionGroups) do
+      if type(group) == "table" and type(group.content) == "string" then
+        local count = group.users and group.users.totalCount
+        if type(count) ~= "number" then
+          count = group.count
+        end
+
+        if type(count) == "number" and count > 0 then
+          counts[group.content] = count
+        end
+      end
+    end
+  end
+
+  if type(comment.reactions) == "table" then
+    for key, value in pairs(comment.reactions) do
+      if type(key) == "string" and type(value) == "number" and value > 0 then
+        counts[key] = value
+      end
+    end
+  end
+
+  local chunks = {}
+  for _, content in ipairs(REACTION_ORDER) do
+    local count = counts[content]
+    local emoji = REACTION_DISPLAY_BY_CONTENT[content]
+    if type(count) == "number" and count > 0 and type(emoji) == "string" then
+      chunks[#chunks + 1] = string.format("%s %d", emoji, count)
+    end
+  end
+
+  if #chunks == 0 then
+    return nil
+  end
+
+  return table.concat(chunks, "  ")
+end
+
 local function should_collapse_thread(thread, show_resolved_bodies)
   return thread.isResolved == true and show_resolved_bodies == false
 end
@@ -338,6 +406,11 @@ local function append_thread_comment_lines(lines, thread, thread_id_by_line, thr
 
     for body_line_index = 1, #body_lines do
       append_line(lines, thread_id_by_line, "> " .. body_lines[body_line_index], thread_id)
+    end
+
+    local reaction_summary = summarize_reactions(comment)
+    if type(reaction_summary) == "string" and reaction_summary ~= "" then
+      append_line(lines, thread_id_by_line, "> Reactions: " .. reaction_summary, thread_id)
     end
 
     if comment_index < #comments then

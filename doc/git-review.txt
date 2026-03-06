@@ -38,7 +38,7 @@ CONTENTS                                                        *git-review*
       `:GitReview range` opens a two-step picker (end commit first, then start)
       and reviews `start...end`.
       `:GitReview range {start} {end}` starts the same range directly.
-      In range mode, mutating actions (comment/reply/submit) are rejected.
+      In range mode, mutating actions (comment/reply/react/submit) are rejected.
 
     files
       Populate the review quickfix list with one entry per changed file.
@@ -58,8 +58,10 @@ CONTENTS                                                        *git-review*
       breaks). Paragraph tags are normalized to paragraph breaks so nested links
       render correctly, and HTML comment blocks are folded to
       `[HTML comment hidden]` placeholders. Thread headings include comment count
-      and resolved status, and comments in the same thread are separated with
-      `> ---` for readability. Resolved thread bodies are collapsed by default.
+      and resolved status, comments in the same thread are separated with
+      `> ---` for readability, and reaction summaries are shown compactly (for
+      example `> Reactions: 👍 2  ❤️ 1`). Resolved thread bodies are collapsed by
+      default.
       Background refresh shows `GitReview: fetching comments...` notification.
 
     panel-all
@@ -92,6 +94,11 @@ CONTENTS                                                        *git-review*
 
     reply
       Reply to the currently selected review thread in the panel.
+
+    react
+      Add a reaction to the currently selected review thread.
+      Opens a command-palette style reaction picker (`vim.ui.select`) with
+      a compact set: 👍 👎 🔥 ✅ 👀 ❤️.
 
     submit
       Submit a review. Prompts for APPROVE or REQUEST_CHANGES and an optional
@@ -143,7 +150,7 @@ git-review.nvim supports startup behavior options through |setup()|:
     Normal-mode action suffix map. Defaults:
       start="o", stop=false, range="O", submit="s", refresh="r", files="f", panel="p",
       panel_all="P",
-      info="i", action="c", toggle_resolved="t",
+      info="i", action="c", react="e", toggle_resolved="t",
       toggle_deletion_block="b", toggle_deletions="d"
     `action` is context-aware: in the comments panel on a selected thread it
     replies, otherwise it prompts for a new comment.
@@ -154,7 +161,8 @@ git-review.nvim supports startup behavior options through |setup()|:
     Visual-mode action suffix map. Default: comment="c".
 
 Range-mode sessions are read-only regardless of keymaps. `:GitReview comment`,
-`:GitReview reply`, and `:GitReview submit` are rejected in range mode.
+`:GitReview reply`, `:GitReview react`, and `:GitReview submit` are rejected in
+range mode.
 
 Disable all default keymaps (opt-out):
 >
@@ -192,9 +200,10 @@ Override one action and disable another:
    between preview and full rendering.
 6. Add comments with `:GitReview comment`.
 7. Reply to selected threads with `:GitReview reply`.
-8. Optional: submit with `:GitReview submit`.
-   (Range mode is read-only: steps 6-8 are unavailable there.)
-9. Run `:GitReview stop` when review is complete.
+8. Optional: react to selected threads with `:GitReview react`.
+9. Optional: submit with `:GitReview submit`.
+   (Range mode is read-only: steps 6-9 are unavailable there.)
+10. Run `:GitReview stop` when review is complete.
 
 With default keymaps enabled, git-review.nvim maps these actions using
 `keymaps.prefix` (default: `<leader>gr`):
@@ -212,6 +221,7 @@ Normal mode:
   i  `:GitReview info`                   open PR info page
   c  context-aware action                reply to selected thread in panel,
                                          otherwise create comment
+  e  `:GitReview react`                  open reaction picker for selected thread
   t  `:GitReview toggle-resolved`        toggle resolved thread body visibility
   b  local deletion toggle               toggle nearest deleted-lines block
   d  buffer deletion toggle              toggle all deleted-lines blocks

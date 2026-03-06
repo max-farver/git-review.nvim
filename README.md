@@ -62,10 +62,11 @@ Run `:GitReview <subcommand>` from a branch that has a pull request:
 - `:GitReview info` - open the PR info page for the current branch pull request.
 - `:GitReview comment` - create a review comment for cursor line or visual range.
 - `:GitReview reply` - reply to the currently selected review thread.
+- `:GitReview react` - add a reaction to the currently selected review thread via a command-palette picker (`vim.ui.select`).
 - `:GitReview submit` - submit a review; prompts for `APPROVE` or `REQUEST_CHANGES`, then an optional message body.
 - `:GitReview stop` - stop review mode, clear active/passive/deletion highlights, and clear review quickfix and review hunk location list items.
 
-Range sessions are read-only: mutating actions (`:GitReview comment`, `:GitReview reply`, and `:GitReview submit`) are rejected in range mode.
+Range sessions are read-only: mutating actions (`:GitReview comment`, `:GitReview reply`, `:GitReview react`, and `:GitReview submit`) are rejected in range mode.
 
 While review mode is active, use location list (`:lnext` / `:lprev`) to move between
 hunks in the selected file. Run `:GitReview files` when you want quickfix navigation,
@@ -82,10 +83,12 @@ The comments panel normalizes common embedded HTML from bot and CI comments into
 readable markdown-like text (for example links, inline/code blocks, emphasis,
 quotes, lists, and line breaks). Thread headings include comment count and
 resolved status, and multi-comment threads use a visible `> ---` separator to
-improve scanning in dense reviews. Paragraph tags are normalized to paragraph
-breaks so nested links render correctly, and HTML comment blocks are folded to
-`[HTML comment hidden]` placeholders. Resolved thread bodies are collapsed by
-default; use `:GitReview toggle-resolved` to toggle them in the panel.
+improve scanning in dense reviews. Reaction summaries are rendered compactly per
+comment (for example `> Reactions: 👍 2  ❤️ 1`). Paragraph tags are normalized to
+paragraph breaks so nested links render correctly, and HTML comment blocks are
+folded to `[HTML comment hidden]` placeholders. Resolved thread bodies are
+collapsed by default; use `:GitReview toggle-resolved` to toggle them in the
+panel.
 
 Typical flow:
 
@@ -96,8 +99,9 @@ Typical flow:
 5. Optional: use `:GitReview toggle-deletion-block`, `:GitReview toggle-deletions`, `:GitReview expand-deletion-blocks`, or `:GitReview collapse-deletion-blocks` to switch deleted-lines blocks between preview/full rendering
 6. Use `:GitReview comment` on changed lines
 7. Select a thread in the panel and run `:GitReview reply`
-8. Optional: run `:GitReview submit` to approve or request changes (with an optional message)
-9. Run `:GitReview stop` when done reviewing
+8. Optional: run `:GitReview react` to add a quick emoji reaction from the picker
+9. Optional: run `:GitReview submit` to approve or request changes (with an optional message)
+10. Run `:GitReview stop` when done reviewing
 
 Default keybinds (`keymaps.enabled = true`) use the prefix `<leader>gr`:
 
@@ -112,6 +116,7 @@ Default keybinds (`keymaps.enabled = true`) use the prefix `<leader>gr`:
 | Normal | `P` | Toggle panel for all comments |
 | Normal | `i` | `:GitReview info` |
 | Normal | `c` | Context-aware action: reply in the panel when a thread is selected; otherwise prompt for a new comment |
+| Normal | `e` | `:GitReview react` (reaction picker for selected thread) |
 | Normal | `t` | `:GitReview toggle-resolved` |
 | Normal | `b` | Toggle the nearest deleted-lines ghost block in the current buffer |
 | Normal | `d` | Toggle deleted-lines ghost blocks buffer-wide between preview/full |
@@ -134,11 +139,12 @@ Default keybinds (`keymaps.enabled = true`) use the prefix `<leader>gr`:
 - `keymaps.normal` action suffixes (defaults):
   - `start = "o"`, `stop = false`, `range = "O"`, `submit = "s"`, `refresh = "r"`, `files = "f"`, `panel = "p"`, `panel_all = "P"`, `info = "i"`
   - `action = "c"` (context-aware: reply in panel on selected thread, comment otherwise)
+  - `react = "e"` (opens a picker with: 👍 👎 🔥 ✅ 👀 ❤️)
   - `toggle_resolved = "t"`, `toggle_deletion_block = "b"` (nearest block), `toggle_deletions = "d"` (buffer-wide toggle)
 - `keymaps.visual` action suffixes (defaults):
   - `comment = "c"`
 
-In range mode, review sessions are read-only regardless of keymap configuration (`comment`, `reply`, and `submit` are rejected).
+In range mode, review sessions are read-only regardless of keymap configuration (`comment`, `reply`, `react`, and `submit` are rejected).
 
 Example:
 
@@ -168,6 +174,7 @@ require("git-review").setup({
       panel_all = "P",
       info = "i",
       action = "c",
+      react = "e",
       toggle_resolved = "t",
       toggle_deletion_block = "b",
       toggle_deletions = "d",

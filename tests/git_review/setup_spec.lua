@@ -97,6 +97,11 @@ set["GitReview dispatcher routes active subcommands"] = function()
         vim.g.git_review_setup_dispatcher_reply_calls = (vim.g.git_review_setup_dispatcher_reply_calls or 0) + 1
         return { state = "ok" }
       end,
+      react_to_selected_thread = function(opts)
+        vim.g.git_review_setup_dispatcher_react_calls = (vim.g.git_review_setup_dispatcher_react_calls or 0) + 1
+        vim.g.git_review_setup_dispatcher_react_opts = opts
+        return { state = "ok" }
+      end,
       toggle_resolved_thread_visibility = function()
         vim.g.git_review_setup_dispatcher_toggle_resolved_calls =
           (vim.g.git_review_setup_dispatcher_toggle_resolved_calls or 0) + 1
@@ -135,6 +140,16 @@ set["GitReview dispatcher routes active subcommands"] = function()
       return "dispatcher comment body"
     end
 
+    local original_ui_select = vim.ui.select
+    vim.ui.select = function(items, _, on_choice)
+      if type(items) == "table" and #items > 0 then
+        on_choice(items[1], 1)
+        return
+      end
+
+      on_choice(nil, nil)
+    end
+
     require("git-review").setup()
     vim.cmd("GitReview start")
     vim.cmd("GitReview refresh")
@@ -144,6 +159,7 @@ set["GitReview dispatcher routes active subcommands"] = function()
     vim.cmd("GitReview info")
     vim.cmd("GitReview comment")
     vim.cmd("GitReview reply")
+    vim.cmd("GitReview react")
     vim.cmd("GitReview toggle-resolved")
     vim.cmd("GitReview toggle-deletion-block")
     vim.cmd("GitReview toggle-deletions")
@@ -152,6 +168,7 @@ set["GitReview dispatcher routes active subcommands"] = function()
     vim.cmd("GitReview stop")
 
     vim.fn.input = original_input
+    vim.ui.select = original_ui_select
   ]=])
 
   local start_calls = child.lua_get([[vim.g.git_review_setup_dispatcher_start_calls or 0]])
@@ -164,6 +181,8 @@ set["GitReview dispatcher routes active subcommands"] = function()
   local comment_calls = child.lua_get([[vim.g.git_review_setup_dispatcher_comment_calls or 0]])
   local comment_opts = child.lua_get([[vim.g.git_review_setup_dispatcher_comment_opts]])
   local reply_calls = child.lua_get([[vim.g.git_review_setup_dispatcher_reply_calls or 0]])
+  local react_calls = child.lua_get([[vim.g.git_review_setup_dispatcher_react_calls or 0]])
+  local react_opts = child.lua_get([[vim.g.git_review_setup_dispatcher_react_opts]])
   local toggle_resolved_calls = child.lua_get([[vim.g.git_review_setup_dispatcher_toggle_resolved_calls or 0]])
   local toggle_block_calls = child.lua_get([[vim.g.git_review_setup_dispatcher_toggle_block_calls or 0]])
   local toggle_deletions_calls = child.lua_get([[vim.g.git_review_setup_dispatcher_toggle_deletions_calls or 0]])
@@ -180,6 +199,8 @@ set["GitReview dispatcher routes active subcommands"] = function()
   assert(comment_calls == 1, "Expected :GitReview comment to call session.create_comment")
   assert(type(comment_opts) == "table" and comment_opts.body == "dispatcher comment body", "Expected :GitReview comment to pass prompt body")
   assert(reply_calls == 1, "Expected :GitReview reply to call session.reply_to_selected_thread")
+  assert(react_calls == 1, "Expected :GitReview react to call session.react_to_selected_thread")
+  assert(type(react_opts) == "table" and react_opts.reaction == "THUMBS_UP", "Expected :GitReview react to pass picker reaction")
   assert(
     toggle_resolved_calls == 1,
     "Expected :GitReview toggle-resolved to call session.toggle_resolved_thread_visibility"
@@ -1035,6 +1056,7 @@ set["setup exposes default keymap config"] = function()
   assert(cfg.keymaps.normal.stop == false, "Expected default normal mode stop key to be disabled")
   assert(cfg.keymaps.normal.submit == "s", "Expected default normal mode submit key")
   assert(cfg.keymaps.normal.action == "c", "Expected default normal mode action key")
+  assert(cfg.keymaps.normal.react == "e", "Expected default normal mode react key")
   assert(cfg.keymaps.normal.panel == "p", "Expected default normal mode panel key")
   assert(cfg.keymaps.normal.panel_all == "P", "Expected default normal mode panel all key")
   assert(cfg.keymaps.normal.toggle_deletion_block == "b", "Expected default normal mode toggle_deletion_block key")
@@ -1086,6 +1108,7 @@ set["setup keymaps follow active-only lifecycle"] = function()
       range = has_lhs("\\grO", "n"),
       submit = has_lhs("\\grs", "n"),
       action = has_lhs("\\grc", "n"),
+      react = has_lhs("\\gre", "n"),
       panel_all = has_lhs("\\grP", "n"),
       toggle_block = has_lhs("\\grb", "n"),
       toggle_all = has_lhs("\\grd", "n"),
@@ -1097,6 +1120,7 @@ set["setup keymaps follow active-only lifecycle"] = function()
   assert(before_start.range == true, "Expected range mapping to be active before start")
   assert(before_start.submit == false, "Expected submit mapping to be inactive before start")
   assert(before_start.action == false, "Expected action mapping to be inactive before start")
+  assert(before_start.react == false, "Expected react mapping to be inactive before start")
   assert(before_start.panel_all == false, "Expected panel-all mapping to be inactive before start")
   assert(before_start.toggle_block == false, "Expected toggle block mapping to be inactive before start")
   assert(before_start.toggle_all == false, "Expected toggle deletions mapping to be inactive before start")
@@ -1114,6 +1138,7 @@ set["setup keymaps follow active-only lifecycle"] = function()
       stop = has_lhs("\\grO", "n"),
       submit = has_lhs("\\grs", "n"),
       action = has_lhs("\\grc", "n"),
+      react = has_lhs("\\gre", "n"),
       panel_all = has_lhs("\\grP", "n"),
       toggle_block = has_lhs("\\grb", "n"),
       toggle_all = has_lhs("\\grd", "n"),
@@ -1124,6 +1149,7 @@ set["setup keymaps follow active-only lifecycle"] = function()
   assert(after_start.stop == false, "Expected stop mapping to remain disabled after start by default")
   assert(after_start.submit == true, "Expected submit mapping to register after start")
   assert(after_start.action == true, "Expected action mapping to register after start")
+  assert(after_start.react == true, "Expected react mapping to register after start")
   assert(after_start.panel_all == true, "Expected panel-all mapping to register after start")
   assert(after_start.toggle_block == true, "Expected toggle block mapping to register after start")
   assert(after_start.toggle_all == true, "Expected toggle deletions mapping to register after start")
@@ -1142,6 +1168,7 @@ set["setup keymaps follow active-only lifecycle"] = function()
       range = has_lhs("\\grO", "n"),
       submit = has_lhs("\\grs", "n"),
       action = has_lhs("\\grc", "n"),
+      react = has_lhs("\\gre", "n"),
       panel_all = has_lhs("\\grP", "n"),
       toggle_block = has_lhs("\\grb", "n"),
       toggle_all = has_lhs("\\grd", "n"),
@@ -1153,6 +1180,7 @@ set["setup keymaps follow active-only lifecycle"] = function()
   assert(after_stop.range == true, "Expected range mapping to be restored after stop")
   assert(after_stop.submit == false, "Expected submit mapping removed on stop")
   assert(after_stop.action == false, "Expected action mapping removed on stop")
+  assert(after_stop.react == false, "Expected react mapping removed on stop")
   assert(after_stop.panel_all == false, "Expected panel-all mapping removed on stop")
   assert(after_stop.toggle_block == false, "Expected toggle block mapping removed on stop")
   assert(after_stop.toggle_all == false, "Expected toggle deletions mapping removed on stop")
@@ -1420,6 +1448,11 @@ set["setup wires action and deletion keymaps to session behavior"] = function()
         vim.g.git_review_setup_comment_opts = opts
         return { state = "ok" }
       end,
+      react_to_selected_thread = function(opts)
+        vim.g.git_review_setup_react_calls = (vim.g.git_review_setup_react_calls or 0) + 1
+        vim.g.git_review_setup_react_opts = opts
+        return { state = "ok" }
+      end,
       toggle_current_deletion_block = function()
         vim.g.git_review_setup_toggle_block_calls = (vim.g.git_review_setup_toggle_block_calls or 0) + 1
         return { state = "ok" }
@@ -1441,6 +1474,16 @@ set["setup wires action and deletion keymaps to session behavior"] = function()
     local original_input = vim.fn.input
     vim.fn.input = function(_)
       return vim.g.git_review_setup_input_body or ""
+    end
+
+    local original_ui_select = vim.ui.select
+    vim.ui.select = function(items, _, on_choice)
+      if type(items) == "table" and #items > 0 then
+        on_choice(items[1], 1)
+        return
+      end
+
+      on_choice(nil, nil)
     end
 
     require("git-review").setup()
@@ -1467,10 +1510,12 @@ set["setup wires action and deletion keymaps to session behavior"] = function()
     vim.g.git_review_setup_selected_thread_id = nil
     vim.g.git_review_setup_input_body = "new comment"
     press("n", "\\grc")
+    press("n", "\\gre")
     press("n", "\\grb")
     press("n", "\\grd")
 
     vim.fn.input = original_input
+    vim.ui.select = original_ui_select
   ]=])
 
   local reply_calls = child.lua_get([[vim.g.git_review_setup_reply_calls or 0]])
@@ -1479,6 +1524,8 @@ set["setup wires action and deletion keymaps to session behavior"] = function()
   local panel_line = child.lua_get([[vim.g.git_review_setup_panel_line]])
   local comment_calls = child.lua_get([[vim.g.git_review_setup_comment_calls or 0]])
   local comment_opts = child.lua_get([[vim.g.git_review_setup_comment_opts]])
+  local react_calls = child.lua_get([[vim.g.git_review_setup_react_calls or 0]])
+  local react_opts = child.lua_get([[vim.g.git_review_setup_react_opts]])
   local toggle_block_calls = child.lua_get([[vim.g.git_review_setup_toggle_block_calls or 0]])
   local toggle_all_calls = child.lua_get([[vim.g.git_review_setup_toggle_all_calls or 0]])
 
@@ -1490,6 +1537,8 @@ set["setup wires action and deletion keymaps to session behavior"] = function()
   assert(type(comment_opts) == "table" and comment_opts.body == "new comment", "Expected prompted comment body to be forwarded")
   assert(type(comment_opts.context) == "table" and comment_opts.context.start_line == 3, "Expected comment context start line")
   assert(type(comment_opts.context) == "table" and comment_opts.context.end_line == 3, "Expected comment context end line")
+  assert(react_calls == 1, "Expected e mapping to call react_to_selected_thread")
+  assert(type(react_opts) == "table" and react_opts.reaction == "THUMBS_UP", "Expected react mapping to forward picker reaction")
   assert(toggle_block_calls == 1, "Expected b mapping to call toggle_current_deletion_block")
   assert(toggle_all_calls == 1, "Expected d mapping to call toggle_deletion_blocks")
 end

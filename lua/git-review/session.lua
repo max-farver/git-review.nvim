@@ -2660,6 +2660,15 @@ function M.create_comment(opts)
   return create_review_comment(comment_payload, opts.send)
 end
 
+local function resolve_reaction_content(value)
+  local github = require("git-review.github")
+  if type(github.normalize_reaction_content) == "function" then
+    return github.normalize_reaction_content(value)
+  end
+
+  return nil
+end
+
 function M.reply_to_selected_thread(opts)
   opts = opts or {}
   vim.validate({
@@ -2723,6 +2732,52 @@ function M.reply_to_selected_thread(opts)
 
   local reply_to_thread = opts.reply_to_thread or require("git-review.github").reply_to_thread
   return reply_to_thread(selected_thread_id, body, opts.send)
+end
+
+function M.react_to_selected_thread(opts)
+  opts = opts or {}
+  vim.validate({
+    opts = { opts, "table" },
+  })
+
+  local range_mode_state = range_mode_unsupported("react_to_selected_thread")
+  if range_mode_state ~= nil then
+    return range_mode_state
+  end
+
+  local panel = opts.panel or require("git-review.ui.panel")
+  local selected_thread_id = opts.thread_id
+  if selected_thread_id == nil and type(panel) == "table" and type(panel.get_selected_thread_id) == "function" then
+    selected_thread_id = panel.get_selected_thread_id({
+      bufnr = opts.bufnr,
+      cursor_line = opts.cursor_line,
+    })
+  end
+
+  if type(selected_thread_id) ~= "string" or selected_thread_id == "" then
+    return {
+      state = "context_error",
+      message = "No review thread selected",
+    }
+  end
+
+  if opts.reaction == nil then
+    return {
+      state = "cancelled",
+      message = "Reaction selection cancelled",
+    }
+  end
+
+  local normalized_reaction = resolve_reaction_content(opts.reaction)
+  if normalized_reaction == nil then
+    return {
+      state = "context_error",
+      message = "Invalid reaction selection",
+    }
+  end
+
+  local add_thread_reaction = opts.add_thread_reaction or require("git-review.github").add_thread_reaction
+  return add_thread_reaction(selected_thread_id, normalized_reaction, opts.send)
 end
 
 function M.open_pr_info(opts)

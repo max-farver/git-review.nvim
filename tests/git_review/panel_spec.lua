@@ -457,6 +457,57 @@ set["panel.render_lines preserves prefixed closing tokens that are not html tags
   assert(lines[3] == "> Keep </code-review> </stronger> </emphasis> </i18n>", "Expected prefixed closing tokens to be preserved")
 end
 
+set["panel.render_lines renders reaction summaries when present"] = function()
+  package.loaded["git-review.ui.panel"] = nil
+  local panel = require("git-review.ui.panel")
+
+  local lines = panel.render_lines({
+    {
+      id = "thread-1",
+      comments = {
+        {
+          author = "alice",
+          body = "Top-level feedback",
+          reactions = {
+            THUMBS_UP = 2,
+            HEART = 1,
+          },
+        },
+      },
+    },
+  })
+
+  assert(lines[4] == "> Reactions: 👍 2  ❤️ 1", "Expected deterministic reaction summary line")
+end
+
+set["panel.render maps reaction summary line to selected thread id"] = function()
+  package.loaded["git-review.ui.panel"] = nil
+  local panel = require("git-review.ui.panel")
+
+  local bufnr = vim.api.nvim_create_buf(false, true)
+  panel.render({
+    {
+      id = "thread-42",
+      comments = {
+        {
+          author = "alice",
+          body = "Top-level",
+          reactions = {
+            THUMBS_UP = 1,
+          },
+        },
+      },
+    },
+  }, { bufnr = bufnr })
+
+  local thread_id = panel.get_selected_thread_id({
+    bufnr = bufnr,
+    cursor_line = 4,
+  })
+
+  assert(thread_id == "thread-42", "Expected reaction summary line to resolve parent thread id")
+end
+
 set["panel.render writes to scratch buffer"] = function()
   package.loaded["git-review.ui.panel"] = nil
   local panel = require("git-review.ui.panel")

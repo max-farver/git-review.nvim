@@ -162,6 +162,74 @@ set["session.reply_to_selected_thread prompts for body when omitted"] = function
   assert(called_body == "prompted reply", "Expected prompted reply body")
 end
 
+set["session.react_to_selected_thread reacts using selected thread id"] = function()
+  local session = require("git-review.session")
+
+  local called = 0
+  local called_thread_id
+  local called_reaction
+
+  local result = session.react_to_selected_thread({
+    reaction = "👍",
+    panel = {
+      get_selected_thread_id = function()
+        return "THREAD_42"
+      end,
+    },
+    add_thread_reaction = function(thread_id, reaction)
+      called = called + 1
+      called_thread_id = thread_id
+      called_reaction = reaction
+      return {
+        state = "ok",
+        reaction = { reaction = { content = reaction } },
+      }
+    end,
+  })
+
+  assert(called == 1, "Expected one react call")
+  assert(called_thread_id == "THREAD_42", "Expected selected thread id")
+  assert(called_reaction == "THUMBS_UP", "Expected normalized reaction content")
+  assert(result.state == "ok", "Expected successful reaction")
+end
+
+set["session.react_to_selected_thread returns cancelled when reaction picker is cancelled"] = function()
+  local session = require("git-review.session")
+
+  local called = 0
+  local result = session.react_to_selected_thread({
+    reaction = nil,
+    panel = {
+      get_selected_thread_id = function()
+        return "THREAD_42"
+      end,
+    },
+    add_thread_reaction = function(_, _)
+      called = called + 1
+      return { state = "ok" }
+    end,
+  })
+
+  assert(result.state == "cancelled", "Expected cancelled state")
+  assert(called == 0, "Expected cancelled reaction to avoid transport call")
+end
+
+set["session.react_to_selected_thread returns context_error for invalid reaction"] = function()
+  local session = require("git-review.session")
+
+  local result = session.react_to_selected_thread({
+    reaction = "not-a-reaction",
+    panel = {
+      get_selected_thread_id = function()
+        return "THREAD_42"
+      end,
+    },
+  })
+
+  assert(result.state == "context_error", "Expected context_error for invalid reaction")
+  assert(result.message == "Invalid reaction selection", "Expected invalid reaction message")
+end
+
 set["session.reply_to_selected_thread returns context_error when no thread selected"] = function()
   local session = require("git-review.session")
 
@@ -558,6 +626,110 @@ set["session.reply_to_selected_thread remains blocked in range mode after refres
   assert(result.state == "unsupported_in_range_mode", "Expected range mode to block reply_to_selected_thread after refresh")
   assert(result.message == "reply_to_selected_thread is unsupported in range mode", "Expected deterministic range mode message")
   assert(called == 0, "Expected blocked reply action to skip transport after refresh")
+
+  session.stop({ panel = { close = function() end } })
+end
+
+set["session.react_to_selected_thread is blocked in range mode"] = function()
+  package.loaded["git-review.session"] = nil
+  local session = require("git-review.session")
+
+  session.start_range({
+    start_ref = "base/head",
+    end_ref = "feature/head",
+    run_command = function(command)
+      if type(command) == "table"
+        and command[1] == "git"
+        and command[2] == "rev-parse"
+        and command[3] == "--show-toplevel"
+      then
+        return {
+          code = 0,
+          stdout = vim.fn.getcwd() .. "\n",
+          stderr = "",
+        }
+      end
+
+      if type(command) == "table"
+        and command[1] == "git"
+        and command[2] == "rev-parse"
+        and command[3] == "--verify"
+        and (command[4] == "base/head^{commit}" or command[4] == "feature/head^{commit}")
+      then
+        return {
+          code = 0,
+          stdout = "validated\n",
+          stderr = "",
+        }
+      end
+
+      if type(command) == "table"
+        and command[1] == "git"
+        and command[2] == "worktree"
+        and command[3] == "add"
+        and command[4] == "--detach"
+        and type(command[5]) == "string"
+        and command[6] == "feature/head"
+      then
+        return {
+          code = 0,
+          stdout = "",
+          stderr = "",
+        }
+      end
+
+      if type(command) == "table"
+        and command[1] == "git"
+        and command[2] == "-C"
+        and type(command[3]) == "string"
+        and command[4] == "diff"
+        and command[5] == "--no-color"
+        and command[6] == "base/head...feature/head"
+      then
+        return {
+          code = 0,
+          stdout = "",
+          stderr = "",
+        }
+      end
+
+      return {
+        code = 1,
+        stdout = "",
+        stderr = "unexpected command",
+      }
+    end,
+    parse_diff = function(_)
+      return {}
+    end,
+    fetch_review_threads = function(_)
+      return {
+        state = "ok",
+        threads = {},
+      }
+    end,
+    panel = {
+      render = function(_) end,
+    },
+    repo_root = vim.fs.normalize(vim.fn.getcwd()),
+    repo = "acme/repo",
+    commit_id = "head-commit",
+    defer_thread_refresh = true,
+  })
+
+  local called = 0
+  local result = session.react_to_selected_thread({
+    thread_id = "THREAD_42",
+    reaction = "👍",
+    add_thread_reaction = function(_, _)
+      called = called + 1
+      return { state = "ok" }
+    end,
+  })
+
+  assert(result.state == "unsupported_in_range_mode", "Expected range mode to block react_to_selected_thread")
+  assert(result.message == "react_to_selected_thread is unsupported in range mode", "Expected deterministic range mode message")
+  assert(called == 0, "Expected blocked reaction action to skip transport")
 
   session.stop({ panel = { close = function() end } })
 end

@@ -449,6 +449,52 @@ function M.create_review_comment(opts, send)
   }
 end
 
+local REACTION_ALIASES = {
+  ["+1"] = "THUMBS_UP",
+  ["-1"] = "THUMBS_DOWN",
+  ["👍"] = "THUMBS_UP",
+  ["👎"] = "THUMBS_DOWN",
+  ["🔥"] = "HOORAY",
+  ["✅"] = "ROCKET",
+  ["👀"] = "EYES",
+  ["❤️"] = "HEART",
+  ["❤"] = "HEART",
+}
+
+local VALID_REACTION_CONTENT = {
+  THUMBS_UP = true,
+  THUMBS_DOWN = true,
+  LAUGH = true,
+  HOORAY = true,
+  CONFUSED = true,
+  HEART = true,
+  ROCKET = true,
+  EYES = true,
+}
+
+function M.normalize_reaction_content(content)
+  if type(content) ~= "string" then
+    return nil
+  end
+
+  local trimmed = vim.trim(content)
+  if trimmed == "" then
+    return nil
+  end
+
+  local alias = REACTION_ALIASES[trimmed]
+  if alias then
+    return alias
+  end
+
+  local upper = string.upper(trimmed)
+  if VALID_REACTION_CONTENT[upper] == true then
+    return upper
+  end
+
+  return nil
+end
+
 function M.reply_to_thread(thread_id, body, send)
   vim.validate({
     thread_id = { thread_id, "string" },
@@ -530,6 +576,96 @@ function M.reply_to_thread(thread_id, body, send)
   return {
     state = "ok",
     reply = reply,
+  }
+end
+
+function M.add_thread_reaction(thread_id, content, send)
+  vim.validate({
+    thread_id = { thread_id, "string" },
+    content = { content, "string" },
+  })
+
+  if thread_id == "" then
+    error("thread_id must be a non-empty string")
+  end
+
+  local normalized_content = M.normalize_reaction_content(content)
+  if normalized_content == nil then
+    error("reaction content must be one of: THUMBS_UP, THUMBS_DOWN, LAUGH, HOORAY, CONFUSED, HEART, ROCKET, EYES")
+  end
+
+  local request = {
+    method = "POST",
+    path = "graphql",
+    body = {
+      query = [[mutation($input: AddReactionInput!) {
+  addReaction(input: $input) {
+    reaction {
+      content
+    }
+    subject {
+      id
+    }
+  }
+}]],
+      variables = {
+        input = {
+          subjectId = thread_id,
+          content = normalized_content,
+        },
+      },
+    },
+  }
+
+  local send_request = type(send) == "function" and send or send_gh_api
+  local raw_result = send_request(request)
+  local result, result_error = normalize_run_result(raw_result)
+  if not result then
+    return invalid_result_error(result_error)
+  end
+
+  if result.code ~= 0 then
+    return {
+      state = "command_error",
+      message = result.stderr ~= "" and result.stderr or "gh api add reaction failed",
+      code = result.code,
+    }
+  end
+
+  if result.stdout == "" then
+    return {
+      state = "ok",
+      reaction = {},
+    }
+  end
+
+  local ok, payload_result = pcall(vim.json.decode, result.stdout)
+  if not ok then
+    return {
+      state = "parse_error",
+      message = payload_result,
+    }
+  end
+
+  if type(payload_result) ~= "table" then
+    return {
+      state = "parse_error",
+      message = "gh api add reaction returned non-object JSON",
+    }
+  end
+
+  local data = payload_result.data
+  local reaction = type(data) == "table" and data.addReaction
+  if type(reaction) ~= "table" then
+    return {
+      state = "parse_error",
+      message = "gh api add reaction returned invalid payload",
+    }
+  end
+
+  return {
+    state = "ok",
+    reaction = reaction,
   }
 end
 

@@ -35,6 +35,7 @@ M.defaults = {
       panel_all = "P",
       info = "i",
       action = "c",
+      react = "e",
       toggle_resolved = "t",
       toggle_deletion_block = "b",
       toggle_deletions = "d",
@@ -80,6 +81,7 @@ function M.setup(opts)
     keymaps_normal_panel_all = { type(keymaps_normal) == "table" and keymaps_normal.panel_all, is_keymap_action, true },
     keymaps_normal_info = { type(keymaps_normal) == "table" and keymaps_normal.info, is_keymap_action, true },
     keymaps_normal_action = { type(keymaps_normal) == "table" and keymaps_normal.action, is_keymap_action, true },
+    keymaps_normal_react = { type(keymaps_normal) == "table" and keymaps_normal.react, is_keymap_action, true },
     keymaps_normal_toggle_resolved = { type(keymaps_normal) == "table" and keymaps_normal.toggle_resolved, is_keymap_action, true },
     keymaps_normal_toggle_deletion_block = {
       type(keymaps_normal) == "table" and keymaps_normal.toggle_deletion_block,

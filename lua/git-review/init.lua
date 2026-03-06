@@ -9,6 +9,7 @@ local ACTIVE_SUBCOMMANDS = {
   "info",
   "comment",
   "reply",
+  "react",
   "submit",
   "toggle-resolved",
   "toggle-deletion-block",
@@ -181,6 +182,41 @@ local function prompt_for_submit_event(on_choice)
   on_choice(nil)
 end
 
+local REACTION_OPTIONS = {
+  { label = "👍  Thumbs up", value = "THUMBS_UP" },
+  { label = "👎  Thumbs down", value = "THUMBS_DOWN" },
+  { label = "🔥  Hooray", value = "HOORAY" },
+  { label = "✅  Rocket", value = "ROCKET" },
+  { label = "👀  Eyes", value = "EYES" },
+  { label = "❤️  Heart", value = "HEART" },
+}
+
+local function prompt_for_reaction(on_choice)
+  local ui = type(vim.ui) == "table" and vim.ui or nil
+  if type(ui) == "table" and type(ui.select) == "function" then
+    ui.select(REACTION_OPTIONS, {
+      prompt = "React with:",
+      format_item = function(item)
+        if type(item) == "table" and type(item.label) == "string" then
+          return item.label
+        end
+
+        return tostring(item)
+      end,
+    }, function(choice)
+      if type(choice) == "table" then
+        on_choice(choice.value)
+        return
+      end
+
+      on_choice(nil)
+    end)
+    return
+  end
+
+  on_choice(nil)
+end
+
 local function run_submit_review_action()
   prompt_for_submit_event(function(event)
     if event ~= "APPROVE" and event ~= "REQUEST_CHANGES" then
@@ -194,6 +230,31 @@ local function run_submit_review_action()
         body = body,
       })
     end)
+  end)
+end
+
+local function run_react_action()
+  prompt_for_reaction(function(reaction)
+    if reaction == nil then
+      return
+    end
+
+    local ok, result = pcall(function()
+      return require("git-review.session").react_to_selected_thread({
+        reaction = reaction,
+      })
+    end)
+
+    if not ok then
+      vim.notify("GitReviewReact failed: " .. tostring(result), vim.log.levels.ERROR)
+      return
+    end
+
+    if type(result) == "table" and result.state == "cancelled" then
+      return
+    end
+
+    notify_result("GitReviewReact", result)
   end)
 end
 
@@ -400,6 +461,7 @@ local function register_active_keymaps()
   map_active_if_enabled("n", normal.panel_all, "<cmd>GitReview panel-all<cr>", "GitReview: panel all")
   map_active_if_enabled("n", normal.info, "<cmd>GitReview info<cr>", "GitReview: info")
   map_active_if_enabled("n", normal.action, run_context_aware_action, "GitReview: comment or reply")
+  map_active_if_enabled("n", normal.react, run_react_action, "GitReview: react to selected thread")
   map_active_if_enabled("n", normal.toggle_resolved, "<cmd>GitReview toggle-resolved<cr>", "GitReview: toggle resolved")
   map_active_if_enabled("n", normal.toggle_deletion_block, function()
     run_session_command("GitReviewToggleDeletionBlock", function()
@@ -686,6 +748,11 @@ local function run_dispatcher(command_opts)
     run_session_command("GitReviewReply", function()
       return require("git-review.session").reply_to_selected_thread()
     end)
+    return
+  end
+
+  if subcommand == "react" then
+    run_react_action()
     return
   end
 
