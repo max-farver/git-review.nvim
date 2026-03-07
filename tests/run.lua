@@ -10,6 +10,7 @@ local function task_suite_files()
     "tests/git_review/github_spec.lua",
     "tests/git_review/errors_spec.lua",
     "tests/git_review/panel_spec.lua",
+    "tests/git_review/progress_spec.lua",
     "tests/git_review/reply_spec.lua",
     "tests/git_review/setup_spec.lua",
     "tests/git_review/smoke_spec.lua",

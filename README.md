@@ -66,6 +66,9 @@ Run `:GitReview <subcommand>`:
 - `:GitReview reply` - reply to the currently selected review thread.
 - `:GitReview react` - add a reaction to the currently selected review thread via a command-palette picker (`vim.ui.select`).
 - `:GitReview submit` - submit a review; prompts for `APPROVE` or `REQUEST_CHANGES`, then an optional message body.
+- `:GitReview mark-reviewed` - toggle reviewed state for the current review file.
+- `:GitReview next-unreviewed` - jump to the next unreviewed file in review order; stops at the end and notifies when all files are reviewed.
+- `:GitReview progress` - show a file-level progress summary (`reviewed/total/remaining`).
 - `:GitReview stop` - stop review mode, clear active/passive/deletion highlights, and clear review quickfix and review hunk location list items.
 
 Range/local/branch sessions are read-only: mutating actions (`:GitReview comment`, `:GitReview reply`, `:GitReview react`, and `:GitReview submit`) are rejected in these modes.
@@ -73,6 +76,7 @@ Range/local/branch sessions are read-only: mutating actions (`:GitReview comment
 While review mode is active, use location list (`:lnext` / `:lprev`) to move between
 hunks in the selected file. Run `:GitReview files` when you want quickfix navigation,
 then use quickfix (`:cnext` / `:cprev`) to move between files.
+Review quickfix entries include file progress markers: `[ ]` for unreviewed files and `[x]` for reviewed files.
 Changed lines are highlighted with diff-semantic groups in file buffers (`DiffAdd` for added lines and `DiffChange` for other changed lines by default).
 Deleted lines are shown as virtual ghost blocks above anchor lines. In preview mode blocks show up to `deletions.max_preview_lines` plus a summary line; full mode shows every deleted line.
 
@@ -102,8 +106,11 @@ Typical flow:
 6. Use `:GitReview comment` on changed lines
 7. Select a thread in the panel and run `:GitReview reply`
 8. Optional: run `:GitReview react` to add a quick emoji reaction from the picker
-9. Optional: run `:GitReview submit` to approve or request changes (with an optional message)
-10. Run `:GitReview stop` when done reviewing
+9. Optional: run `:GitReview mark-reviewed` to toggle the current file's reviewed state
+10. Optional: run `:GitReview next-unreviewed` to jump forward through remaining files
+11. Optional: run `:GitReview progress` to view reviewed/remaining counts
+12. Optional: run `:GitReview submit` to approve or request changes (with an optional message)
+13. Run `:GitReview stop` when done reviewing
 
 Default keybinds (`keymaps.enabled = true`) use the prefix `<leader>gr`:
 
@@ -119,6 +126,9 @@ Default keybinds (`keymaps.enabled = true`) use the prefix `<leader>gr`:
 | Normal | `i` | `:GitReview info` |
 | Normal | `c` | Context-aware action: reply in the panel when a thread is selected; otherwise prompt for a new comment |
 | Normal | `e` | `:GitReview react` (reaction picker for selected thread) |
+| Normal | `m` | `:GitReview mark-reviewed` (toggle current file reviewed state) |
+| Normal | `n` | `:GitReview next-unreviewed` |
+| Normal | `g` | `:GitReview progress` |
 | Normal | `t` | `:GitReview toggle-resolved` |
 | Normal | `b` | Toggle the nearest deleted-lines ghost block in the current buffer |
 | Normal | `d` | Toggle deleted-lines ghost blocks buffer-wide between preview/full |
@@ -137,11 +147,13 @@ Default keybinds (`keymaps.enabled = true`) use the prefix `<leader>gr`:
 - `deletions.max_preview_lines` (default: `6`) - number of deleted lines shown per block in preview mode.
 - `deletions.default_expanded` (default: `false`) - start each deleted block in full mode instead of preview mode.
 - `keymaps.enabled` (default: `true`) - register built-in keymaps.
+- `progress.github_sync` (default: `false`) - when `true`, `:GitReview mark-reviewed` attempts to sync viewed/unviewed file state to GitHub for PR-backed sessions. Range/local/branch sessions remain local-only.
 - `keymaps.prefix` (default: `"<leader>gr"`) - prefix prepended to each action suffix.
 - `keymaps.normal` action suffixes (defaults):
   - `start = "o"`, `stop = false`, `range = "O"`, `submit = "s"`, `refresh = "r"`, `files = "f"`, `panel = "p"`, `panel_all = "P"`, `info = "i"`
   - `action = "c"` (context-aware: reply in panel on selected thread, comment otherwise)
   - `react = "e"` (opens a picker with: 👍 👎 🔥 ✅ 👀 ❤️)
+  - `mark_reviewed = "m"`, `next_unreviewed = "n"`, `progress = "g"`
   - `toggle_resolved = "t"`, `toggle_deletion_block = "b"` (nearest block), `toggle_deletions = "d"` (buffer-wide toggle)
 - `keymaps.visual` action suffixes (defaults):
   - `comment = "c"`
@@ -163,6 +175,9 @@ require("git-review").setup({
     max_preview_lines = 6,
     default_expanded = false,
   },
+  progress = {
+    github_sync = false,
+  },
   keymaps = {
     enabled = true,
     prefix = "<leader>gr",
@@ -178,6 +193,9 @@ require("git-review").setup({
       info = "i",
       action = "c",
       react = "e",
+      mark_reviewed = "m",
+      next_unreviewed = "n",
+      progress = "g",
       toggle_resolved = "t",
       toggle_deletion_block = "b",
       toggle_deletions = "d",

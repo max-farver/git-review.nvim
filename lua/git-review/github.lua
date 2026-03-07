@@ -76,7 +76,7 @@ function M.resolve_pr_for_branch(branch, run)
     "--head",
     branch,
     "--json",
-    "number,title,body,author,baseRefName,headRefName,url",
+    "id,number,title,body,author,baseRefName,headRefName,url",
   }
   local raw_result = run_command(argv)
   local result, result_error = normalize_run_result(raw_result)
@@ -667,6 +667,87 @@ function M.add_thread_reaction(thread_id, content, send)
     state = "ok",
     reaction = reaction,
   }
+end
+
+local function run_file_viewed_mutation(pull_request_id, path, mutation_name, send)
+  vim.validate({
+    pull_request_id = { pull_request_id, "string" },
+    path = { path, "string" },
+    mutation_name = { mutation_name, "string" },
+  })
+
+  if pull_request_id == "" then
+    error("pull_request_id must be a non-empty string")
+  end
+
+  if path == "" then
+    error("path must be a non-empty string")
+  end
+
+  local request = {
+    method = "POST",
+    path = "graphql",
+    body = {
+      query = string.format([[mutation($input: %%s!) {
+  %s(input: $input) {
+    clientMutationId
+  }
+}]], mutation_name),
+      variables = {
+        input = {
+          pullRequestId = pull_request_id,
+          path = path,
+        },
+      },
+    },
+  }
+
+  local input_type = mutation_name == "markFileAsViewed" and "MarkFileAsViewedInput" or "UnmarkFileAsViewedInput"
+  request.body.query = string.format(request.body.query, input_type)
+
+  local send_request = type(send) == "function" and send or send_gh_api
+  local raw_result = send_request(request)
+  local result, result_error = normalize_run_result(raw_result)
+  if not result then
+    return invalid_result_error(result_error)
+  end
+
+  if result.code ~= 0 then
+    return {
+      state = "command_error",
+      message = result.stderr ~= "" and result.stderr or "gh api file viewed mutation failed",
+      code = result.code,
+    }
+  end
+
+  if result.stdout ~= "" then
+    local ok, payload_result = pcall(vim.json.decode, result.stdout)
+    if not ok then
+      return {
+        state = "parse_error",
+        message = payload_result,
+      }
+    end
+
+    if type(payload_result) ~= "table" then
+      return {
+        state = "parse_error",
+        message = "gh api file viewed mutation returned non-object JSON",
+      }
+    end
+  end
+
+  return {
+    state = "ok",
+  }
+end
+
+function M.mark_file_viewed(pull_request_id, path, send)
+  return run_file_viewed_mutation(pull_request_id, path, "markFileAsViewed", send)
+end
+
+function M.unmark_file_viewed(pull_request_id, path, send)
+  return run_file_viewed_mutation(pull_request_id, path, "unmarkFileAsViewed", send)
 end
 
 return M

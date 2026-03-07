@@ -11,6 +11,9 @@ local ACTIVE_SUBCOMMANDS = {
   "reply",
   "react",
   "submit",
+  "mark-reviewed",
+  "next-unreviewed",
+  "progress",
   "toggle-resolved",
   "toggle-deletion-block",
   "toggle-deletions",
@@ -464,6 +467,9 @@ local function register_active_keymaps()
   map_active_if_enabled("n", normal.info, "<cmd>GitReview info<cr>", "GitReview: info")
   map_active_if_enabled("n", normal.action, run_context_aware_action, "GitReview: comment or reply")
   map_active_if_enabled("n", normal.react, run_react_action, "GitReview: react to selected thread")
+  map_active_if_enabled("n", normal.mark_reviewed, "<cmd>GitReview mark-reviewed<cr>", "GitReview: mark reviewed")
+  map_active_if_enabled("n", normal.next_unreviewed, "<cmd>GitReview next-unreviewed<cr>", "GitReview: next unreviewed")
+  map_active_if_enabled("n", normal.progress, "<cmd>GitReview progress<cr>", "GitReview: progress")
   map_active_if_enabled("n", normal.toggle_resolved, "<cmd>GitReview toggle-resolved<cr>", "GitReview: toggle resolved")
   map_active_if_enabled("n", normal.toggle_deletion_block, function()
     run_session_command("GitReviewToggleDeletionBlock", function()
@@ -786,6 +792,48 @@ local function run_dispatcher(command_opts)
 
   if subcommand == "submit" then
     run_submit_review_action()
+    return
+  end
+
+  if subcommand == "mark-reviewed" then
+    local success, result = run_session_command("GitReviewMarkReviewed", function()
+      return require("git-review.session").toggle_current_file_reviewed()
+    end)
+    if success and type(result) == "table" then
+      if result.reviewed == true then
+        vim.notify("GitReview: marked reviewed", vim.log.levels.INFO)
+      elseif result.reviewed == false then
+        vim.notify("GitReview: marked unreviewed", vim.log.levels.INFO)
+      end
+    end
+    return
+  end
+
+  if subcommand == "next-unreviewed" then
+    local success, result = run_session_command("GitReviewNextUnreviewed", function()
+      return require("git-review.session").goto_next_unreviewed_file()
+    end)
+    if success and type(result) == "table" and result.done == true then
+      vim.notify("GitReview: all files reviewed", vim.log.levels.INFO)
+    end
+    return
+  end
+
+  if subcommand == "progress" then
+    local success, result = run_session_command("GitReviewProgress", function()
+      return require("git-review.session").review_progress()
+    end)
+    if success and type(result) == "table" then
+      vim.notify(
+        string.format(
+          "GitReview: Reviewed %d/%d files (%d remaining)",
+          result.reviewed or 0,
+          result.total or 0,
+          result.remaining or 0
+        ),
+        vim.log.levels.INFO
+      )
+    end
     return
   end
 

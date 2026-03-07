@@ -151,6 +151,136 @@ local function build_file_quickfix_items(hunks)
   return items
 end
 
+local function normalize_review_file(path)
+  if type(path) ~= "string" or path == "" then
+    return nil
+  end
+
+  return vim.fs.normalize(path)
+end
+
+local function build_review_file_order(file_items)
+  local order = {}
+  if type(file_items) ~= "table" then
+    return order
+  end
+
+  for _, item in ipairs(file_items) do
+    if type(item) == "table" and type(item.filename) == "string" and item.filename ~= "" then
+      local normalized = normalize_review_file(item.filename)
+      if type(normalized) == "string" and normalized ~= "" then
+        table.insert(order, normalized)
+      end
+    end
+  end
+
+  return order
+end
+
+local function build_reviewed_file_map(review_file_order, previous)
+  local reviewed = {}
+  if type(review_file_order) ~= "table" then
+    return reviewed
+  end
+
+  for _, path in ipairs(review_file_order) do
+    if type(path) == "string" and path ~= "" and type(previous) == "table" and previous[path] == true then
+      reviewed[path] = true
+    end
+  end
+
+  return reviewed
+end
+
+local function is_reviewed_file(session, path)
+  if type(session) ~= "table" then
+    return false
+  end
+
+  local normalized = normalize_review_file(path)
+  if type(normalized) ~= "string" then
+    return false
+  end
+
+  local reviewed_files = session.reviewed_files
+  return type(reviewed_files) == "table" and reviewed_files[normalized] == true
+end
+
+local function find_review_file_index(session, path)
+  if type(session) ~= "table" then
+    return nil
+  end
+
+  local normalized = normalize_review_file(path)
+  if type(normalized) ~= "string" then
+    return nil
+  end
+
+  local review_file_order = session.review_file_order
+  if type(review_file_order) ~= "table" then
+    return nil
+  end
+
+  for idx, item in ipairs(review_file_order) do
+    if item == normalized then
+      return idx
+    end
+  end
+
+  return nil
+end
+
+local function format_review_file_status(session, path)
+  if is_reviewed_file(session, path) then
+    return "[x] "
+  end
+
+  return "[ ] "
+end
+
+local function build_review_quickfix_items(session)
+  local base_items = build_file_quickfix_items(type(session) == "table" and session.hunks or {})
+  local items = {}
+  for _, item in ipairs(base_items) do
+    if type(item) == "table" then
+      local copy = vim.deepcopy(item)
+      local status = format_review_file_status(session, copy.filename)
+      local text = type(copy.text) == "string" and copy.text or "Git Review File"
+      copy.text = status .. text
+      table.insert(items, copy)
+    end
+  end
+
+  return items
+end
+
+local function refresh_review_quickfix_markers(session)
+  if type(session) ~= "table" then
+    return
+  end
+
+  local review_quickfix_list_id = session.review_quickfix_list_id
+  if type(review_quickfix_list_id) ~= "number" then
+    return
+  end
+
+  local current_quickfix_list = vim.fn.getqflist({ id = 0 })
+  if type(current_quickfix_list) ~= "table" or current_quickfix_list.id ~= review_quickfix_list_id then
+    return
+  end
+
+  local quickfix_idx = vim.fn.getqflist({ idx = 0 })
+  local current_idx = type(quickfix_idx) == "table" and type(quickfix_idx.idx) == "number" and quickfix_idx.idx or 1
+  local items = build_review_quickfix_items(session)
+
+  vim.fn.setqflist({}, "r", {
+    id = review_quickfix_list_id,
+    title = "Git Review Files",
+    items = items,
+    idx = resolve_initial_quickfix_index(items) or current_idx,
+  })
+end
+
 local function build_picker_file_choices(file_items, repo_root)
   if type(file_items) ~= "table" then
     return {}
@@ -1488,8 +1618,11 @@ function M.start(opts)
     repo_root = repo_root,
   })
   local file_items = build_file_quickfix_items(hunks)
+  local review_file_order = build_review_file_order(file_items)
   current_session.hunks_by_file = build_hunks_by_file(hunks)
   current_session.hunks = hunks
+  current_session.review_file_order = review_file_order
+  current_session.reviewed_files = build_reviewed_file_map(review_file_order, opts.reviewed_files)
   debug_log("parsed hunks: " .. tostring(#hunks))
   local picker_choices = build_picker_file_choices(file_items, repo_root)
   current_session.picker_file_choice_cache = build_picker_file_choice_cache(picker_choices)
@@ -2018,7 +2151,7 @@ function M.populate_files_quickfix()
     }
   end
 
-  local items = build_file_quickfix_items(current_session.hunks or {})
+  local items = build_review_quickfix_items(current_session)
   vim.fn.setqflist({}, " ", {
     title = "Git Review Files",
     items = items,
@@ -2073,6 +2206,7 @@ function M.refresh(opts)
       review_repo_root = current_session.review_repo_root,
       worktree_path = current_session.worktree_path,
       worktree_owned = current_session.worktree_owned,
+      reviewed_files = current_session.reviewed_files,
     }
   end
 
@@ -2192,6 +2326,280 @@ end
 
 function M.is_active()
   return current_session ~= nil
+end
+
+local function resolve_current_review_file_path(session, opts)
+  opts = opts or {}
+
+  local selected_file = nil
+  local selected_qf_item = resolve_selected_quickfix_item(session.review_quickfix_list_id)
+  selected_file = quickfix_item_path(selected_qf_item)
+
+  if type(selected_file) ~= "string" or selected_file == "" then
+    local bufnr = opts.bufnr or 0
+    local buffer_name = vim.api.nvim_buf_get_name(bufnr)
+    if type(buffer_name) == "string" and buffer_name ~= "" then
+      selected_file = buffer_name
+    end
+  end
+
+  local selected_normalized = normalize_review_file(selected_file)
+  if type(selected_normalized) ~= "string" then
+    return nil
+  end
+
+  local review_idx = find_review_file_index(session, selected_normalized)
+  if type(review_idx) ~= "number" then
+    return nil
+  end
+
+  return selected_normalized
+end
+
+local function resolve_pull_request_node_id(session, opts)
+  if type(session) ~= "table" then
+    return nil
+  end
+
+  if type(session.pr) == "table" and type(session.pr.id) == "string" and session.pr.id ~= "" then
+    return session.pr.id
+  end
+
+  local resolve_branch = opts.resolve_branch or session.resolve_branch
+  local resolve_pr_for_branch = opts.resolve_pr_for_branch or session.resolve_pr_for_branch
+  local run_command = opts.run_command or session.run_command
+  if type(resolve_branch) ~= "function" or type(resolve_pr_for_branch) ~= "function" or type(run_command) ~= "function" then
+    return nil
+  end
+
+  local branch = resolve_branch(run_command)
+  if type(branch) ~= "string" or branch == "" then
+    return nil
+  end
+
+  local pr_result = resolve_pr_for_branch(branch, run_command)
+  if type(pr_result) ~= "table" or pr_result.state ~= "single_pr" or type(pr_result.pr) ~= "table" then
+    return nil
+  end
+
+  if type(pr_result.pr.id) == "string" and pr_result.pr.id ~= "" then
+    session.pr = pr_result.pr
+    session.pr_number = pr_result.pr.number
+    return pr_result.pr.id
+  end
+
+  return nil
+end
+
+local function should_sync_progress_to_github(session)
+  if type(session) ~= "table" then
+    return false
+  end
+
+  if session.mode == "range" or session.mode == "local" or session.mode == "branch" then
+    return false
+  end
+
+  local cfg = require("git-review.config").get()
+  return type(cfg) == "table"
+    and type(cfg.progress) == "table"
+    and cfg.progress.github_sync == true
+end
+
+local function sync_file_viewed_state(session, opts)
+  opts = opts or {}
+  if should_sync_progress_to_github(session) ~= true then
+    return nil
+  end
+
+  local pull_request_id = resolve_pull_request_node_id(session, opts)
+  if type(pull_request_id) ~= "string" or pull_request_id == "" then
+    return {
+      state = "context_error",
+      message = "Unable to resolve pull request node id for viewed sync",
+    }
+  end
+
+  local path = opts.path
+  if type(path) ~= "string" or path == "" then
+    return {
+      state = "context_error",
+      message = "Unable to resolve file path for viewed sync",
+    }
+  end
+
+  local repo_root = session.repo_root
+  local relative_path = resolve_repo_relative_path(path, repo_root)
+  if type(relative_path) ~= "string" or relative_path == "" then
+    relative_path = path
+  end
+
+  if opts.reviewed == true then
+    local mark_file_viewed = opts.mark_file_viewed or require("git-review.github").mark_file_viewed
+    return mark_file_viewed(pull_request_id, relative_path, opts.send)
+  end
+
+  local unmark_file_viewed = opts.unmark_file_viewed or require("git-review.github").unmark_file_viewed
+  return unmark_file_viewed(pull_request_id, relative_path, opts.send)
+end
+
+function M.toggle_current_file_reviewed(opts)
+  opts = opts or {}
+  vim.validate({
+    opts = { opts, "table" },
+  })
+
+  if current_session == nil then
+    return {
+      state = "context_error",
+      message = "No active review session. Run :GitReview start first.",
+    }
+  end
+
+  local path = resolve_current_review_file_path(current_session, opts)
+  if type(path) ~= "string" then
+    return {
+      state = "context_error",
+      message = "Current file is not part of the active review.",
+    }
+  end
+
+  current_session.reviewed_files = current_session.reviewed_files or {}
+  local reviewed = current_session.reviewed_files[path] ~= true
+  if reviewed then
+    current_session.reviewed_files[path] = true
+  else
+    current_session.reviewed_files[path] = nil
+  end
+
+  refresh_review_quickfix_markers(current_session)
+
+  local sync_state = sync_file_viewed_state(current_session, {
+    path = path,
+    reviewed = reviewed,
+    mark_file_viewed = opts.mark_file_viewed,
+    unmark_file_viewed = opts.unmark_file_viewed,
+    run_command = opts.run_command,
+    resolve_branch = opts.resolve_branch,
+    resolve_pr_for_branch = opts.resolve_pr_for_branch,
+    send = opts.send,
+  })
+
+  local synced = nil
+  if type(sync_state) == "table" then
+    synced = sync_state.state == "ok"
+    if synced ~= true then
+      vim.notify("GitReview: viewed sync failed: " .. tostring(sync_state.message or sync_state.state), vim.log.levels.WARN)
+    end
+  end
+
+  return {
+    state = "ok",
+    path = path,
+    reviewed = reviewed,
+    synced = synced,
+  }
+end
+
+function M.review_progress(opts)
+  opts = opts or {}
+  vim.validate({
+    opts = { opts, "table" },
+  })
+
+  if current_session == nil then
+    return {
+      state = "context_error",
+      message = "No active review session. Run :GitReview start first.",
+    }
+  end
+
+  local total = type(current_session.review_file_order) == "table" and #current_session.review_file_order or 0
+  local reviewed = 0
+  if type(current_session.reviewed_files) == "table" and type(current_session.review_file_order) == "table" then
+    for _, path in ipairs(current_session.review_file_order) do
+      if current_session.reviewed_files[path] == true then
+        reviewed = reviewed + 1
+      end
+    end
+  end
+
+  return {
+    state = "ok",
+    reviewed = reviewed,
+    total = total,
+    remaining = math.max(0, total - reviewed),
+  }
+end
+
+function M.goto_next_unreviewed_file(opts)
+  opts = opts or {}
+  vim.validate({
+    opts = { opts, "table" },
+  })
+
+  if current_session == nil then
+    return {
+      state = "context_error",
+      message = "No active review session. Run :GitReview start first.",
+    }
+  end
+
+  local review_file_order = current_session.review_file_order
+  if type(review_file_order) ~= "table" or #review_file_order == 0 then
+    return {
+      state = "context_error",
+      message = "No review files available.",
+    }
+  end
+
+  local current_path = resolve_current_review_file_path(current_session, opts)
+  local start_index = 0
+  if type(current_path) == "string" then
+    local current_index = find_review_file_index(current_session, current_path)
+    if type(current_index) == "number" then
+      start_index = current_index
+    end
+  end
+
+  local target = nil
+  for idx = start_index + 1, #review_file_order do
+    local path = review_file_order[idx]
+    if not is_reviewed_file(current_session, path) then
+      target = path
+      break
+    end
+  end
+
+  if type(target) ~= "string" then
+    return {
+      state = "ok",
+      done = true,
+    }
+  end
+
+  sync_loclist_for_selected_file(current_session, target)
+  local target_winid = resolve_review_loclist_winid(current_session)
+  if type(target_winid) == "number" and target_winid > 0 and vim.api.nvim_win_is_valid(target_winid) then
+    vim.api.nvim_set_current_win(target_winid)
+  end
+
+  pcall(vim.api.nvim_cmd, { cmd = "edit", args = { target } }, {})
+
+  local first_range = resolve_first_hunk_range(current_session, target)
+  if is_valid_hunk_item(first_range) then
+    pcall(vim.api.nvim_win_set_cursor, 0, { first_range.lnum, 0 })
+  end
+
+  pcall(refresh_review_navigation_state, current_session, {
+    review_quickfix_list_id = current_session.review_quickfix_list_id,
+  })
+
+  return {
+    state = "ok",
+    done = false,
+    path = target,
+  }
 end
 
 function M.open_panel(opts)

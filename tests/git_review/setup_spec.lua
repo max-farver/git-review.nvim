@@ -1812,4 +1812,207 @@ set["repo fixture helper make_repo validates input"] = function()
   assert(string.find(err_empty_path, "opts.path must be a non-empty string", 1, true), "Expected empty path validation error")
 end
 
+set["GitReview dispatcher routes review-progress subcommands"] = function()
+  child.lua([=[
+    package.loaded["git-review.session"] = {
+      is_active = function()
+        return true
+      end,
+      toggle_current_file_reviewed = function()
+        vim.g.git_review_setup_dispatcher_mark_reviewed_calls =
+          (vim.g.git_review_setup_dispatcher_mark_reviewed_calls or 0) + 1
+        return { state = "ok", reviewed = true }
+      end,
+      goto_next_unreviewed_file = function()
+        vim.g.git_review_setup_dispatcher_next_unreviewed_calls =
+          (vim.g.git_review_setup_dispatcher_next_unreviewed_calls or 0) + 1
+        return { state = "ok", done = false }
+      end,
+      review_progress = function()
+        vim.g.git_review_setup_dispatcher_progress_calls =
+          (vim.g.git_review_setup_dispatcher_progress_calls or 0) + 1
+        return { state = "ok", reviewed = 1, total = 2, remaining = 1 }
+      end,
+    }
+
+    require("git-review").setup()
+    vim.cmd("GitReview mark-reviewed")
+    vim.cmd("GitReview next-unreviewed")
+    vim.cmd("GitReview progress")
+  ]=])
+
+  local mark_reviewed_calls = child.lua_get([[vim.g.git_review_setup_dispatcher_mark_reviewed_calls or 0]])
+  local next_unreviewed_calls = child.lua_get([[vim.g.git_review_setup_dispatcher_next_unreviewed_calls or 0]])
+  local progress_calls = child.lua_get([[vim.g.git_review_setup_dispatcher_progress_calls or 0]])
+
+  assert(mark_reviewed_calls == 1, "Expected :GitReview mark-reviewed to call session.toggle_current_file_reviewed")
+  assert(next_unreviewed_calls == 1, "Expected :GitReview next-unreviewed to call session.goto_next_unreviewed_file")
+  assert(progress_calls == 1, "Expected :GitReview progress to call session.review_progress")
+end
+
+set["GitReview dispatcher completion includes review-progress subcommands when active"] = function()
+  local completion_state = child.lua_get([=[(function()
+    package.loaded["git-review.session"] = {
+      is_active = function()
+        return true
+      end,
+    }
+
+    require("git-review").setup()
+    local active = vim.fn.getcompletion("GitReview ", "cmdline")
+
+    local function has(items, expected)
+      for _, item in ipairs(items or {}) do
+        if item == expected then
+          return true
+        end
+      end
+
+      return false
+    end
+
+    return {
+      active_has_mark_reviewed = has(active, "mark-reviewed"),
+      active_has_next_unreviewed = has(active, "next-unreviewed"),
+      active_has_progress = has(active, "progress"),
+    }
+  end)()]=])
+
+  assert(completion_state.active_has_mark_reviewed == true, "Expected active completion to include mark-reviewed")
+  assert(completion_state.active_has_next_unreviewed == true, "Expected active completion to include next-unreviewed")
+  assert(completion_state.active_has_progress == true, "Expected active completion to include progress")
+end
+
+set["setup exposes default progress sync config"] = function()
+  child.lua([[package.loaded["git-review.config"] = nil]])
+  child.lua([[require("git-review").setup()]])
+
+  local cfg = child.lua_get([[require("git-review.config").get()]])
+  assert(type(cfg.progress) == "table", "Expected progress config table")
+  assert(cfg.progress.github_sync == false, "Expected progress.github_sync default to false")
+end
+
+set["setup merges progress sync override"] = function()
+  child.lua([[package.loaded["git-review.config"] = nil]])
+  child.lua([[require("git-review").setup({ progress = { github_sync = true } })]])
+
+  local cfg = child.lua_get([[require("git-review.config").get()]])
+  assert(type(cfg.progress) == "table", "Expected progress config table")
+  assert(cfg.progress.github_sync == true, "Expected progress.github_sync override")
+end
+
+set["setup rejects non-boolean progress.github_sync"] = function()
+  local result = child.lua_get([=[(function()
+    package.loaded["git-review.config"] = nil
+    local status, setup_err = pcall(require("git-review").setup, {
+      progress = {
+        github_sync = "yes",
+      },
+    })
+    return {
+      ok = status,
+      err = setup_err,
+    }
+  end)()]=])
+
+  assert(result.ok == false, "Expected setup to fail for non-boolean progress.github_sync")
+  assert(type(result.err) == "string" and string.find(result.err, "boolean", 1, true), "Expected boolean validation message")
+end
+
+set["setup exposes default progress keymap config"] = function()
+  child.lua([[package.loaded["git-review.config"] = nil]])
+  child.lua([[require("git-review").setup()]])
+
+  local cfg = child.lua_get([[require("git-review.config").get()]])
+  assert(type(cfg.keymaps) == "table" and type(cfg.keymaps.normal) == "table", "Expected normal keymap config")
+  assert(cfg.keymaps.normal.mark_reviewed == "m", "Expected default mark-reviewed key suffix")
+  assert(cfg.keymaps.normal.next_unreviewed == "n", "Expected default next-unreviewed key suffix")
+  assert(cfg.keymaps.normal.progress == "g", "Expected default progress key suffix")
+end
+
+set["setup keymaps include progress actions only while review is active"] = function()
+  child.lua([=[
+    package.loaded["git-review.config"] = nil
+    package.loaded["git-review.session"] = {
+      is_active = function()
+        return vim.g.git_review_setup_progress_keymaps_active == true
+      end,
+      start = function()
+        vim.g.git_review_setup_progress_keymaps_active = true
+        return { state = "ok" }
+      end,
+      stop = function()
+        vim.g.git_review_setup_progress_keymaps_active = false
+        return { state = "ok" }
+      end,
+      toggle_current_file_reviewed = function()
+        return { state = "ok" }
+      end,
+      goto_next_unreviewed_file = function()
+        return { state = "ok", done = false }
+      end,
+      review_progress = function()
+        return { state = "ok", reviewed = 0, total = 0, remaining = 0 }
+      end,
+    }
+
+    require("git-review").setup()
+  ]=])
+
+  local before_start = child.lua_get([[(function()
+    local function has_lhs(lhs, mode)
+      local map = vim.fn.maparg(lhs, mode, false, true)
+      return type(map) == "table" and map.lhs == lhs
+    end
+
+    return {
+      mark_reviewed = has_lhs("\\grm", "n"),
+      next_unreviewed = has_lhs("\\grn", "n"),
+      progress = has_lhs("\\grg", "n"),
+    }
+  end)()]])
+
+  child.lua([[vim.cmd("GitReview start")]])
+
+  local after_start = child.lua_get([[(function()
+    local function has_lhs(lhs, mode)
+      local map = vim.fn.maparg(lhs, mode, false, true)
+      return type(map) == "table" and map.lhs == lhs
+    end
+
+    return {
+      mark_reviewed = has_lhs("\\grm", "n"),
+      next_unreviewed = has_lhs("\\grn", "n"),
+      progress = has_lhs("\\grg", "n"),
+    }
+  end)()]])
+
+  child.lua([[vim.cmd("GitReview stop")]])
+
+  local after_stop = child.lua_get([[(function()
+    local function has_lhs(lhs, mode)
+      local map = vim.fn.maparg(lhs, mode, false, true)
+      return type(map) == "table" and map.lhs == lhs
+    end
+
+    return {
+      mark_reviewed = has_lhs("\\grm", "n"),
+      next_unreviewed = has_lhs("\\grn", "n"),
+      progress = has_lhs("\\grg", "n"),
+    }
+  end)()]])
+
+  assert(before_start.mark_reviewed == false, "Expected mark-reviewed mapping inactive before review start")
+  assert(before_start.next_unreviewed == false, "Expected next-unreviewed mapping inactive before review start")
+  assert(before_start.progress == false, "Expected progress mapping inactive before review start")
+
+  assert(after_start.mark_reviewed == true, "Expected mark-reviewed mapping active during review")
+  assert(after_start.next_unreviewed == true, "Expected next-unreviewed mapping active during review")
+  assert(after_start.progress == true, "Expected progress mapping active during review")
+
+  assert(after_stop.mark_reviewed == false, "Expected mark-reviewed mapping removed after stop")
+  assert(after_stop.next_unreviewed == false, "Expected next-unreviewed mapping removed after stop")
+  assert(after_stop.progress == false, "Expected progress mapping removed after stop")
+end
+
 return set

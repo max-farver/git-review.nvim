@@ -23,7 +23,7 @@ set["resolve_pr_for_branch returns single_pr state"] = function()
   assert(called_argv[5] == "feature/task-3", "Expected branch argv")
   assert(called_argv[6] == "--json", "Expected --json flag argv")
   assert(
-    called_argv[7] == "number,title,body,author,baseRefName,headRefName,url",
+    called_argv[7] == "id,number,title,body,author,baseRefName,headRefName,url",
     "Expected --json fields argv"
   )
 
@@ -463,6 +463,88 @@ set["add_thread_reaction validates reaction content"] = function()
 
   assert(ok == false, "Expected invalid reaction content to error")
   assert(type(err) == "string" and string.find(err, "reaction content", 1, true), "Expected reaction validation error")
+end
+
+set["mark_file_viewed assembles GraphQL request payload"] = function()
+  local github = require("git-review.github")
+  local captured_request
+
+  local result = github.mark_file_viewed("PR_kwDOAA", "lua/git-review/init.lua", function(request)
+    captured_request = request
+    return {
+      code = 0,
+      stdout = [[{"data":{"markFileAsViewed":{"clientMutationId":null}}}]],
+      stderr = "",
+    }
+  end)
+
+  assert(type(captured_request) == "table", "Expected request table")
+  assert(captured_request.method == "POST", "Expected POST request")
+  assert(captured_request.path == "graphql", "Expected GraphQL API path")
+  assert(type(captured_request.body) == "table", "Expected GraphQL request body")
+  assert(type(captured_request.body.query) == "string", "Expected GraphQL mutation query")
+  assert(string.find(captured_request.body.query, "markFileAsViewed", 1, true), "Expected markFileAsViewed mutation")
+  assert(captured_request.body.variables.input.pullRequestId == "PR_kwDOAA", "Expected pull request id variable")
+  assert(captured_request.body.variables.input.path == "lua/git-review/init.lua", "Expected viewed path variable")
+
+  assert(result.state == "ok", "Expected ok state")
+end
+
+set["unmark_file_viewed assembles GraphQL request payload"] = function()
+  local github = require("git-review.github")
+  local captured_request
+
+  local result = github.unmark_file_viewed("PR_kwDOAA", "lua/git-review/init.lua", function(request)
+    captured_request = request
+    return {
+      code = 0,
+      stdout = [[{"data":{"unmarkFileAsViewed":{"clientMutationId":null}}}]],
+      stderr = "",
+    }
+  end)
+
+  assert(type(captured_request) == "table", "Expected request table")
+  assert(captured_request.method == "POST", "Expected POST request")
+  assert(captured_request.path == "graphql", "Expected GraphQL API path")
+  assert(type(captured_request.body) == "table", "Expected GraphQL request body")
+  assert(type(captured_request.body.query) == "string", "Expected GraphQL mutation query")
+  assert(string.find(captured_request.body.query, "unmarkFileAsViewed", 1, true), "Expected unmarkFileAsViewed mutation")
+  assert(captured_request.body.variables.input.pullRequestId == "PR_kwDOAA", "Expected pull request id variable")
+  assert(captured_request.body.variables.input.path == "lua/git-review/init.lua", "Expected viewed path variable")
+
+  assert(result.state == "ok", "Expected ok state")
+end
+
+set["mark_file_viewed validates required input"] = function()
+  local github = require("git-review.github")
+
+  local ok, err = pcall(function()
+    github.mark_file_viewed("", "lua/git-review/init.lua", function(_)
+      return {
+        code = 0,
+        stdout = "",
+        stderr = "",
+      }
+    end)
+  end)
+
+  assert(ok == false, "Expected empty pull_request_id to raise validation error")
+  assert(type(err) == "string" and string.find(err, "pull_request_id", 1, true), "Expected pull_request_id validation error")
+end
+
+set["unmark_file_viewed returns command_error on gh failure"] = function()
+  local github = require("git-review.github")
+
+  local result = github.unmark_file_viewed("PR_kwDOAA", "lua/git-review/init.lua", function(_)
+    return {
+      code = 1,
+      stdout = "",
+      stderr = "gh: validation failed",
+    }
+  end)
+
+  assert(result.state == "command_error", "Expected command_error state")
+  assert(result.message == "gh: validation failed", "Expected command failure message")
 end
 
 return set

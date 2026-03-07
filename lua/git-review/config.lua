@@ -36,6 +36,9 @@ M.defaults = {
       info = "i",
       action = "c",
       react = "e",
+      mark_reviewed = "m",
+      next_unreviewed = "n",
+      progress = "g",
       toggle_resolved = "t",
       toggle_deletion_block = "b",
       toggle_deletions = "d",
@@ -43,6 +46,9 @@ M.defaults = {
     visual = {
       comment = "c",
     },
+  },
+  progress = {
+    github_sync = false,
   },
   integrations = {
     mini_clue = {
@@ -58,6 +64,7 @@ function M.setup(opts)
   local keymaps = opts.keymaps
   local keymaps_normal = keymaps and keymaps.normal
   local keymaps_visual = keymaps and keymaps.visual
+  local progress = opts.progress
   local integrations = opts.integrations
   local integrations_mini_clue = integrations and integrations.mini_clue
 
@@ -89,6 +96,13 @@ function M.setup(opts)
     keymaps_normal_info = { type(keymaps_normal) == "table" and keymaps_normal.info, is_keymap_action, true },
     keymaps_normal_action = { type(keymaps_normal) == "table" and keymaps_normal.action, is_keymap_action, true },
     keymaps_normal_react = { type(keymaps_normal) == "table" and keymaps_normal.react, is_keymap_action, true },
+    keymaps_normal_mark_reviewed = { type(keymaps_normal) == "table" and keymaps_normal.mark_reviewed, is_keymap_action, true },
+    keymaps_normal_next_unreviewed = {
+      type(keymaps_normal) == "table" and keymaps_normal.next_unreviewed,
+      is_keymap_action,
+      true,
+    },
+    keymaps_normal_progress = { type(keymaps_normal) == "table" and keymaps_normal.progress, is_keymap_action, true },
     keymaps_normal_toggle_resolved = { type(keymaps_normal) == "table" and keymaps_normal.toggle_resolved, is_keymap_action, true },
     keymaps_normal_toggle_deletion_block = {
       type(keymaps_normal) == "table" and keymaps_normal.toggle_deletion_block,
@@ -101,6 +115,8 @@ function M.setup(opts)
       true,
     },
     keymaps_visual_comment = { type(keymaps_visual) == "table" and keymaps_visual.comment, is_keymap_action, true },
+    progress = { progress, "table", true },
+    progress_github_sync = { type(progress) == "table" and progress.github_sync, "boolean", true },
     integrations = { integrations, "table", true },
     integrations_mini_clue = { integrations_mini_clue, "table", true },
     integrations_mini_clue_ensure_panel_triggers = {

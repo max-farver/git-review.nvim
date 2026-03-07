@@ -113,6 +113,16 @@ CONTENTS                                                        *git-review*
       Submit a review. Prompts for APPROVE or REQUEST_CHANGES and an optional
       message body.
 
+    mark-reviewed
+      Toggle reviewed/unreviewed state for the current review file.
+
+    next-unreviewed
+      Jump to the next unreviewed review file. Stops at the end and notifies
+      when all files are reviewed.
+
+    progress
+      Show file-level review progress summary (reviewed/total/remaining).
+
     stop
       Stop active review mode.
       Clears active hunk highlights, passive file hunk highlights, deleted-lines
@@ -152,6 +162,11 @@ git-review.nvim supports startup behavior options through |setup()|:
 `keymaps.enabled` (default: true)
     Enables built-in default mappings.
 
+`progress.github_sync` (default: false)
+    When true, `:GitReview mark-reviewed` attempts to sync viewed/unviewed file
+    state to GitHub for PR-backed sessions. Range/local/branch sessions remain
+    local-only.
+
 `keymaps.prefix` (default: "<leader>gr")
     Prefix added before each keymap action suffix.
 
@@ -159,7 +174,8 @@ git-review.nvim supports startup behavior options through |setup()|:
     Normal-mode action suffix map. Defaults:
       start="o", stop=false, range="O", submit="s", refresh="r", files="f", panel="p",
       panel_all="P",
-      info="i", action="c", react="e", toggle_resolved="t",
+      info="i", action="c", react="e", mark_reviewed="m",
+      next_unreviewed="n", progress="g", toggle_resolved="t",
       toggle_deletion_block="b", toggle_deletions="d"
     `action` is context-aware: in the comments panel on a selected thread it
     replies, otherwise it prompts for a new comment.
@@ -210,6 +226,8 @@ Override one action and disable another:
    (truncated to `deletions.max_preview_lines`) or full mode.
 4. Optional: Run `:GitReview files` and navigate files with quickfix commands
    like `:cnext` and `:cprev`.
+   Review quickfix entries use `[ ]` for unreviewed files and `[x]` for
+   reviewed files.
 5. Optional: Use `:GitReview toggle-deletion-block`,
    `:GitReview toggle-deletions`, `:GitReview expand-deletion-blocks`, or
    `:GitReview collapse-deletion-blocks` to switch deleted-line ghost blocks
@@ -217,9 +235,12 @@ Override one action and disable another:
 6. Add comments with `:GitReview comment`.
 7. Reply to selected threads with `:GitReview reply`.
 8. Optional: react to selected threads with `:GitReview react`.
-9. Optional: submit with `:GitReview submit`.
-   (Range/local/branch modes are read-only: steps 6-9 are unavailable there.)
-10. Run `:GitReview stop` when review is complete.
+9. Optional: toggle file review state with `:GitReview mark-reviewed`.
+10. Optional: jump forward with `:GitReview next-unreviewed`.
+11. Optional: view file progress with `:GitReview progress`.
+12. Optional: submit with `:GitReview submit`.
+   (Range/local/branch modes are read-only for comment/reply/react/submit.)
+13. Run `:GitReview stop` when review is complete.
 
 With default keymaps enabled, git-review.nvim maps these actions using
 `keymaps.prefix` (default: `<leader>gr`):
@@ -238,6 +259,9 @@ Normal mode:
   c  context-aware action                reply to selected thread in panel,
                                          otherwise create comment
   e  `:GitReview react`                  open reaction picker for selected thread
+  m  `:GitReview mark-reviewed`          toggle current file reviewed state
+  n  `:GitReview next-unreviewed`        jump to next unreviewed file
+  g  `:GitReview progress`               show reviewed/remaining file progress
   t  `:GitReview toggle-resolved`        toggle resolved thread body visibility
   b  local deletion toggle               toggle nearest deleted-lines block
   d  buffer deletion toggle              toggle all deleted-lines blocks
