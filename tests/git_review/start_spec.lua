@@ -4120,6 +4120,7 @@ index 1111111..2222222 100644
 
   local saw_pr_base_diff = false
   local saw_upstream_lookup = false
+  local saw_local_diff = false
   for _, command in ipairs(commands) do
     if type(command) == "table"
       and command[1] == "git"
@@ -4139,10 +4140,20 @@ index 1111111..2222222 100644
     then
       saw_upstream_lookup = true
     end
+
+    if type(command) == "table"
+      and command[1] == "git"
+      and command[2] == "diff"
+      and command[3] == "--no-color"
+      and command[4] == "HEAD"
+    then
+      saw_local_diff = true
+    end
   end
 
   assert(saw_pr_base_diff, "Expected diff range derived from PR base branch")
   assert(saw_upstream_lookup == false, "Expected no upstream fallback when PR base is available")
+  assert(saw_local_diff == false, "Expected PR base diff to win before local fallback")
 end
 
 set["session.start falls back to upstream diff range when PR base is unavailable"] = function()
@@ -4228,6 +4239,7 @@ index 1111111..2222222 100644
 
   local saw_upstream_lookup = false
   local saw_upstream_diff = false
+  local saw_local_diff = false
   for _, command in ipairs(commands) do
     if type(command) == "table"
       and command[1] == "git"
@@ -4247,13 +4259,339 @@ index 1111111..2222222 100644
     then
       saw_upstream_diff = true
     end
+
+    if type(command) == "table"
+      and command[1] == "git"
+      and command[2] == "diff"
+      and command[3] == "--no-color"
+      and command[4] == "HEAD"
+    then
+      saw_local_diff = true
+    end
   end
 
   assert(saw_upstream_lookup, "Expected upstream lookup fallback")
   assert(saw_upstream_diff, "Expected upstream diff fallback")
+  assert(saw_local_diff == false, "Expected upstream fallback to win before local diff")
 end
 
-set["session.start returns actionable error when default range resolution fails"] = function()
+set["session.start falls back to local diff when PR and upstream are unavailable"] = function()
+  child.lua([[package.loaded["git-review.session"] = nil]])
+
+  child.lua([=[
+    local session = require("git-review.session")
+    vim.ui.select = _G.git_review_test_auto_select
+
+    local commands = {}
+    local diff = [[
+diff --git a/README.md b/README.md
+index 1111111..2222222 100644
+--- a/README.md
++++ b/README.md
+@@ -1,1 +1,2 @@
+ # git-review.nvim
++local-fallback
+]]
+
+    local start_result = session.start({
+      run_command = function(command)
+        table.insert(commands, command)
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "rev-parse"
+          and command[3] == "--abbrev-ref"
+          and command[4] == "--symbolic-full-name"
+          and command[5] == "@{upstream}"
+        then
+          return {
+            code = 128,
+            stdout = "",
+            stderr = "fatal: no upstream configured",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "diff"
+          and command[3] == "--no-color"
+          and command[4] == "HEAD"
+        then
+          return {
+            code = 0,
+            stdout = diff,
+            stderr = "",
+          }
+        end
+
+        return {
+          code = 1,
+          stdout = "",
+          stderr = "unexpected command",
+        }
+      end,
+      resolve_branch = function(_)
+        return "feature/no-pr"
+      end,
+      resolve_pr_for_branch = function(_)
+        return {
+          state = "no_pr",
+        }
+      end,
+      fetch_review_threads = function(_)
+        return {
+          state = "ok",
+          threads = {},
+        }
+      end,
+      panel = {
+        render = function(_) end,
+      },
+      repo_root = ".",
+    })
+
+    local mode = nil
+    local pr_number = nil
+    for idx = 1, 40 do
+      local upvalue_name, upvalue_value = debug.getupvalue(session.start, idx)
+      if upvalue_name == nil then
+        break
+      end
+
+      if upvalue_name == "current_session" and type(upvalue_value) == "table" then
+        mode = upvalue_value.mode
+        pr_number = upvalue_value.pr_number
+        break
+      end
+    end
+
+    vim.g.git_review_auto_local_fallback_result = start_result
+    vim.g.git_review_auto_local_fallback_commands = commands
+    vim.g.git_review_auto_local_fallback_mode = mode
+    vim.g.git_review_auto_local_fallback_pr_number_is_nil = pr_number == nil
+  ]=])
+
+  local result = child.lua_get([[vim.g.git_review_auto_local_fallback_result]])
+  local commands = child.lua_get([[vim.g.git_review_auto_local_fallback_commands]])
+  local mode = child.lua_get([[vim.g.git_review_auto_local_fallback_mode]])
+  local pr_number_is_nil = child.lua_get([[vim.g.git_review_auto_local_fallback_pr_number_is_nil]])
+
+  assert(type(result) == "table" and type(result.hunks) == "table", "Expected local fallback start result")
+  assert(result.auto_fallback == true, "Expected local fallback metadata")
+  assert(result.source == "local", "Expected local fallback source metadata")
+  assert(mode == "local", "Expected automatic local fallback to set local mode when opts.mode is nil")
+  assert(pr_number_is_nil == true, "Expected automatic local fallback to keep PR metadata unset")
+
+  local saw_local_diff = false
+  for _, command in ipairs(commands) do
+    if type(command) == "table"
+      and command[1] == "git"
+      and command[2] == "diff"
+      and command[3] == "--no-color"
+      and command[4] == "HEAD"
+    then
+      saw_local_diff = true
+      break
+    end
+  end
+
+  assert(saw_local_diff == true, "Expected automatic local fallback diff command")
+end
+
+set["session.start reports actionable error when PR and upstream are unavailable and local diff is empty"] = function()
+  child.lua([[package.loaded["git-review.session"] = nil]])
+
+  child.lua([=[
+    local session = require("git-review.session")
+    vim.ui.select = _G.git_review_test_auto_select
+
+    local ok, err = pcall(session.start, {
+      run_command = function(command)
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "rev-parse"
+          and command[3] == "--abbrev-ref"
+          and command[4] == "--symbolic-full-name"
+          and command[5] == "@{upstream}"
+        then
+          return {
+            code = 128,
+            stdout = "",
+            stderr = "fatal: no upstream configured",
+          }
+        end
+
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "diff"
+          and command[3] == "--no-color"
+          and command[4] == "HEAD"
+        then
+          return {
+            code = 0,
+            stdout = "",
+            stderr = "",
+          }
+        end
+
+        return {
+          code = 1,
+          stdout = "",
+          stderr = "unexpected command",
+        }
+      end,
+      resolve_branch = function(_)
+        return "feature/no-pr"
+      end,
+      resolve_pr_for_branch = function(_)
+        return {
+          state = "no_pr",
+        }
+      end,
+    })
+
+    local is_active = session.is_active()
+
+    vim.g.git_review_auto_local_empty_ok = ok
+    vim.g.git_review_auto_local_empty_error = err
+    vim.g.git_review_auto_local_empty_active = is_active
+  ]=])
+
+  local ok = child.lua_get([[vim.g.git_review_auto_local_empty_ok]])
+  local err = child.lua_get([[vim.g.git_review_auto_local_empty_error]])
+  local is_active = child.lua_get([[vim.g.git_review_auto_local_empty_active]])
+
+  assert(ok == false, "Expected start to fail when no PR/upstream and local diff is empty")
+  assert(type(err) == "string" and string.find(err, "no pull request", 1, true), "Expected no PR mention in error")
+  assert(type(err) == "string" and string.find(err, "no upstream", 1, true), "Expected no upstream mention in error")
+  assert(
+    type(err) == "string" and string.find(err, "no local tracked changes", 1, true),
+    "Expected no local tracked changes mention in error"
+  )
+  assert(is_active == false, "Expected start failure to avoid creating a session")
+end
+
+set["session.refresh stays usable for automatic local fallback sessions"] = function()
+  child.lua([[package.loaded["git-review.session"] = nil]])
+
+  child.lua([=[
+    local session = require("git-review.session")
+    vim.ui.select = _G.git_review_test_auto_select
+
+    local diff = [[
+diff --git a/README.md b/README.md
+index 1111111..2222222 100644
+--- a/README.md
++++ b/README.md
+@@ -1,1 +1,2 @@
+ # git-review.nvim
++local-fallback-refresh
+]]
+
+    local diff_calls = 0
+    local resolve_pr_calls = 0
+
+    local function run_command(command)
+      if type(command) == "table"
+        and command[1] == "git"
+        and command[2] == "rev-parse"
+        and command[3] == "--abbrev-ref"
+        and command[4] == "--symbolic-full-name"
+        and command[5] == "@{upstream}"
+      then
+        return {
+          code = 128,
+          stdout = "",
+          stderr = "fatal: no upstream configured",
+        }
+      end
+
+      if type(command) == "table"
+        and command[1] == "git"
+        and command[2] == "diff"
+        and command[3] == "--no-color"
+        and command[4] == "HEAD"
+      then
+        diff_calls = diff_calls + 1
+        return {
+          code = 0,
+          stdout = diff,
+          stderr = "",
+        }
+      end
+
+      return {
+        code = 1,
+        stdout = "",
+        stderr = "unexpected command",
+      }
+    end
+
+    local start_result = session.start({
+      run_command = run_command,
+      resolve_branch = function(_)
+        return "feature/no-pr"
+      end,
+      resolve_pr_for_branch = function(_)
+        resolve_pr_calls = resolve_pr_calls + 1
+        return {
+          state = "no_pr",
+        }
+      end,
+      fetch_review_threads = function(_)
+        return {
+          state = "ok",
+          threads = {},
+        }
+      end,
+      panel = {
+        render = function(_) end,
+      },
+      repo_root = ".",
+    })
+
+    local refresh_result = session.refresh()
+
+    local auto_fallback = nil
+    local mode = nil
+    for idx = 1, 40 do
+      local upvalue_name, upvalue_value = debug.getupvalue(session.start, idx)
+      if upvalue_name == nil then
+        break
+      end
+
+      if upvalue_name == "current_session" and type(upvalue_value) == "table" then
+        auto_fallback = upvalue_value.auto_fallback
+        mode = upvalue_value.mode
+        break
+      end
+    end
+
+    vim.g.git_review_auto_local_refresh_start_result = start_result
+    vim.g.git_review_auto_local_refresh_result = refresh_result
+    vim.g.git_review_auto_local_refresh_diff_calls = diff_calls
+    vim.g.git_review_auto_local_refresh_pr_calls = resolve_pr_calls
+    vim.g.git_review_auto_local_refresh_mode = mode
+    vim.g.git_review_auto_local_refresh_auto_fallback = auto_fallback
+  ]=])
+
+  local start_result = child.lua_get([[vim.g.git_review_auto_local_refresh_start_result]])
+  local refresh_result = child.lua_get([[vim.g.git_review_auto_local_refresh_result]])
+  local diff_calls = child.lua_get([[vim.g.git_review_auto_local_refresh_diff_calls]])
+  local resolve_pr_calls = child.lua_get([[vim.g.git_review_auto_local_refresh_pr_calls]])
+  local mode = child.lua_get([[vim.g.git_review_auto_local_refresh_mode]])
+  local auto_fallback = child.lua_get([[vim.g.git_review_auto_local_refresh_auto_fallback]])
+
+  assert(type(start_result) == "table" and start_result.auto_fallback == true, "Expected automatic local fallback start")
+  assert(type(refresh_result) == "table" and refresh_result.state == "ok", "Expected refresh to succeed in automatic local fallback mode")
+  assert(type(refresh_result.hunks) == "table", "Expected refreshed local fallback hunks")
+  assert(diff_calls == 2, "Expected refresh to rerun the local diff command")
+  assert(resolve_pr_calls == 1, "Expected automatic local fallback refresh to avoid repeated PR lookups")
+  assert(mode == "local", "Expected automatic local fallback session mode to stay local after refresh")
+  assert(auto_fallback == true, "Expected automatic local fallback state to persist across refresh")
+end
+
+set["session.start surfaces local diff command errors during automatic fallback"] = function()
   child.lua([[package.loaded["git-review.session"] = nil]])
 
   child.lua([[
@@ -4275,10 +4613,31 @@ set["session.start returns actionable error when default range resolution fails"
           }
         end
 
+        if type(command) == "table"
+          and command[1] == "git"
+          and command[2] == "diff"
+          and command[3] == "--no-color"
+          and command[4] == "HEAD"
+        then
+          return {
+            code = 1,
+            stdout = "",
+            stderr = "fatal: local diff failed",
+          }
+        end
+
         return {
           code = 1,
           stdout = "",
           stderr = "unexpected command",
+        }
+      end,
+      resolve_branch = function(_)
+        return "feature/no-pr"
+      end,
+      resolve_pr_for_branch = function(_)
+        return {
+          state = "no_pr",
         }
       end,
     })
@@ -4290,9 +4649,8 @@ set["session.start returns actionable error when default range resolution fails"
   local ok = child.lua_get([[vim.g.git_review_range_error_ok]])
   local err = child.lua_get([[vim.g.git_review_range_error_message]])
 
-  assert(ok == false, "Expected session.start to fail when range resolution fails")
-  assert(string.find(err, "Unable to determine review diff range", 1, true), "Expected actionable range failure message")
-  assert(string.find(err, "fatal: no upstream configured", 1, true), "Expected original git error in message")
+  assert(ok == false, "Expected session.start to fail when automatic local fallback diff fails")
+  assert(string.find(err, "fatal: local diff failed", 1, true), "Expected local diff failure message")
 end
 
 set["session.start keeps upstream ref as a single diff argv argument"] = function()

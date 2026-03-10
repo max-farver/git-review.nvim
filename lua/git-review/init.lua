@@ -533,10 +533,13 @@ register_default_keymaps = function()
 end
 
 local function run_start_action()
-  local success = run_start_like_command("GitReview start", function()
+  local success, result = run_start_like_command("GitReview start", function()
     return require("git-review.session").start()
-  end, ". Check your branch upstream or pass opts.diff_command to session.start().")
+  end)
   if success then
+    if type(result) == "table" and result.auto_fallback == true and result.source == "local" then
+      vim.notify("GitReview: no PR or upstream found; started local working-tree review", vim.log.levels.INFO)
+    end
     register_active_keymaps()
     return true
   end

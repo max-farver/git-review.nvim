@@ -601,6 +601,111 @@ set["GitReview dispatcher routes local and branch subcommands while inactive"] =
   assert(type(result.notifications) == "table" and #result.notifications == 0, "Expected no notifications for valid local/branch commands")
 end
 
+set["GitReview start notifies only on automatic local fallback"] = function()
+  local result = child.lua_get([=[(function()
+    vim.g.git_review_setup_dispatcher_active = false
+    vim.g.git_review_setup_dispatcher_start_result = {
+      hunks = {},
+      auto_fallback = true,
+      source = "local",
+    }
+
+    package.loaded["git-review.session"] = {
+      is_active = function()
+        return vim.g.git_review_setup_dispatcher_active == true
+      end,
+      start = function()
+        vim.g.git_review_setup_dispatcher_start_notify_calls =
+          (vim.g.git_review_setup_dispatcher_start_notify_calls or 0) + 1
+        vim.g.git_review_setup_dispatcher_active = true
+        return vim.g.git_review_setup_dispatcher_start_result
+      end,
+      stop = function()
+        vim.g.git_review_setup_dispatcher_active = false
+        return { state = "ok" }
+      end,
+    }
+
+    local notifications = {}
+    local original_notify = vim.notify
+    vim.notify = function(message, level)
+      table.insert(notifications, {
+        message = message,
+        level = level,
+      })
+    end
+
+    require("git-review").setup()
+
+    vim.cmd("GitReview start")
+    vim.cmd("GitReview stop")
+
+    vim.g.git_review_setup_dispatcher_start_result = {
+      hunks = {},
+      auto_fallback = false,
+      source = "upstream",
+    }
+
+    vim.cmd("GitReview start")
+
+    vim.notify = original_notify
+
+    return {
+      start_calls = vim.g.git_review_setup_dispatcher_start_notify_calls or 0,
+      notifications = notifications,
+    }
+  end)()]=])
+
+  local notifications = result.notifications or {}
+  assert(result.start_calls == 2, "Expected :GitReview start to run twice")
+  assert(type(notifications) == "table" and #notifications == 1, "Expected only automatic fallback info notification")
+  assert(
+    string.find(notifications[1].message or "", "no PR or upstream found", 1, true),
+    "Expected automatic fallback notification message"
+  )
+  assert(notifications[1].level == vim.log.levels.INFO, "Expected automatic fallback notification at info level")
+end
+
+set["GitReview start failure does not append stale upstream guidance after fallback exhaustion"] = function()
+  local result = child.lua_get([=[(function()
+    package.loaded["git-review.session"] = {
+      start = function()
+        error("Unable to start review: no pull request, no upstream branch, and no local tracked changes to review.")
+      end,
+    }
+
+    local notifications = {}
+    local original_notify = vim.notify
+    vim.notify = function(message, level)
+      table.insert(notifications, {
+        message = message,
+        level = level,
+      })
+    end
+
+    require("git-review").setup()
+    vim.cmd("GitReview start")
+
+    vim.notify = original_notify
+
+    return {
+      notifications = notifications,
+    }
+  end)()]=])
+
+  local notifications = result.notifications or {}
+  assert(type(notifications) == "table" and #notifications == 1, "Expected a single start failure notification")
+  assert(
+    string.find(notifications[1].message or "", "no local tracked changes", 1, true),
+    "Expected fallback exhaustion detail in start failure"
+  )
+  assert(
+    string.find(notifications[1].message or "", "Check your branch upstream", 1, true) == nil,
+    "Expected no stale upstream-only guidance after automatic local fallback was already attempted"
+  )
+  assert(notifications[1].level == vim.log.levels.ERROR, "Expected start failure notification at error level")
+end
+
 set["GitReview dispatcher handles range picker cancel without activating session"] = function()
   local result = child.lua_get([=[(function()
     package.loaded["git-review.session"] = {

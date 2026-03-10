@@ -1,6 +1,8 @@
 local T = require("mini.test")
 
-local function task_suite_files()
+local M = {}
+
+local function default_suite_files()
   local files = {
     "tests/git_review/comment_create_spec.lua",
     "tests/git_review/positions_spec.lua",
@@ -21,11 +23,23 @@ local function task_suite_files()
   return files
 end
 
-T.run({
-  collect = {
-    find_files = task_suite_files,
-  },
-  execute = {
-    reporter = T.gen_reporter.stdout({ group_depth = 2, quit_on_finish = true }),
-  },
-})
+function M.run(files)
+  vim.validate({
+    files = { files, "table", true },
+  })
+
+  local suite_files = files or default_suite_files()
+
+  T.run({
+    collect = {
+      find_files = function()
+        return vim.deepcopy(suite_files)
+      end,
+    },
+    execute = {
+      reporter = T.gen_reporter.stdout({ group_depth = 2, quit_on_finish = false }),
+    },
+  })
+end
+
+return M

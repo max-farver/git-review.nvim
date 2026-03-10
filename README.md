@@ -47,8 +47,8 @@ The plugin bootstrap auto-registers commands during startup.
 
 Run `:GitReview <subcommand>`:
 
-- `:GitReview start` - start review for the current branch (PR-aware when available); opens a file picker for changed files, seeds the current window location list with hunks after selection (using startup-cached hunk data when available), keeps comments panel closed by default, and enables hunk highlights in file buffers.
-- `:GitReview local` - start a local working-tree review (`git diff HEAD`) for uncommitted tracked changes.
+- `:GitReview start` - start review for the current branch; it prefers a PR-base diff when a single PR can be resolved, then the current branch upstream, and finally falls back to a local working-tree review (`git diff HEAD`) when no PR/upstream source is available and tracked local changes exist. It opens a file picker for changed files, seeds the current window location list with hunks after selection (using startup-cached hunk data when available), keeps comments panel closed by default, and enables hunk highlights in file buffers.
+- `:GitReview local` - explicitly start a local working-tree review (`git diff HEAD`) for uncommitted tracked changes, even when PR/upstream review is available.
 - `:GitReview branch <base> [<head>]` - start a branch/ref review for `<base>...<head>` (`HEAD` when omitted).
 - `:GitReview range` - open a two-step commit picker (end first, then start) and start a commit-range review session for `start...end` (available when review is inactive, like `:GitReview start`).
 - `:GitReview range <start> <end>` - start a commit-range review session directly for `start...end`.
@@ -71,7 +71,7 @@ Run `:GitReview <subcommand>`:
 - `:GitReview progress` - show a file-level progress summary (`reviewed/total/remaining`).
 - `:GitReview stop` - stop review mode, clear active/passive/deletion highlights, and clear review quickfix and review hunk location list items.
 
-Range/local/branch sessions are read-only: mutating actions (`:GitReview comment`, `:GitReview reply`, `:GitReview react`, and `:GitReview submit`) are rejected in these modes.
+Range/local/branch sessions are read-only: mutating actions (`:GitReview comment`, `:GitReview reply`, `:GitReview react`, and `:GitReview submit`) are rejected in these modes. This includes automatic local fallback sessions started by `:GitReview start`.
 
 While review mode is active, use location list (`:lnext` / `:lprev`) to move between
 hunks in the selected file. Run `:GitReview files` when you want quickfix navigation,
@@ -98,7 +98,7 @@ panel.
 
 Typical flow:
 
-1. `:GitReview start` (or `:GitReview local` / `:GitReview branch <base> [<head>]`)
+1. `:GitReview start` (PR base first, then upstream, then automatic local fallback when needed) or `:GitReview local` / `:GitReview branch <base> [<head>]`
 2. Pick a file from the picker to seed the hunk loclist
 3. Jump between hunks with `:lnext` / `:lprev`
 4. Optional: run `:GitReview files` then `:cnext` / `:cprev` to move between files

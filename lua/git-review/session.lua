@@ -51,6 +51,10 @@ local function resolve_default_diff_command(run_command)
   return { "git", "diff", "--no-color", upstream .. "...HEAD" }
 end
 
+local function resolve_local_diff_command()
+  return { "git", "diff", "--no-color", "HEAD" }
+end
+
 local function resolve_pr_base_diff_command(run_command, resolve_branch, resolve_pr_for_branch)
   local branch, branch_error = resolve_branch(run_command)
   if type(branch) ~= "string" or branch == "" then
@@ -1531,6 +1535,8 @@ function M.start(opts)
   local debug_log = resolve_debug_log(opts)
   local diff_command = opts.diff_command
   local pr_diff_payload = nil
+  local resolved_source = nil
+  local auto_fallback = false
 
   if diff_command == nil then
     local ok_pr_diff
@@ -1540,6 +1546,7 @@ function M.start(opts)
       and type(pr_diff_payload.diff_command) == "table"
     if has_pr_diff_payload then
       diff_command = pr_diff_payload.diff_command
+      resolved_source = "pr"
       debug_log("using PR base diff command: " .. command_to_string(diff_command))
     else
       local pr_diff_error = "unknown error"
@@ -1548,16 +1555,29 @@ function M.start(opts)
       else
         pr_diff_error = "resolver crashed: " .. tostring(pr_diff_payload)
       end
-      local upstream_command
-      local command_error
-      upstream_command, command_error = resolve_diff_command(run_command)
-      if not upstream_command then
-        error(command_error)
-      end
 
-      diff_command = upstream_command
-      debug_log("falling back to upstream diff command; PR base unavailable: " .. pr_diff_error)
+      local upstream_command
+      local upstream_error
+      upstream_command, upstream_error = resolve_diff_command(run_command)
+      if upstream_command then
+        diff_command = upstream_command
+        resolved_source = "upstream"
+        debug_log("falling back to upstream diff command; PR base unavailable: " .. pr_diff_error)
+      else
+        diff_command = resolve_local_diff_command()
+        resolved_source = "local"
+        auto_fallback = true
+        pr_diff_payload = nil
+        debug_log(
+          "falling back to local working tree diff; PR base unavailable: "
+            .. pr_diff_error
+            .. "; upstream unavailable: "
+            .. tostring(upstream_error)
+        )
+      end
     end
+  else
+    resolved_source = "explicit"
   end
 
   if type(diff_command) == "string" then
@@ -1578,10 +1598,15 @@ function M.start(opts)
     error(result.stderr ~= "" and result.stderr or "git diff failed")
   end
 
+  if auto_fallback == true and trim(result.stdout) == "" then
+    error("Unable to start review: no pull request, no upstream branch, and no local tracked changes to review.")
+  end
+
   local fallback_cwd = opts.cwd or vim.loop.cwd()
   local repo_root = opts.repo_root or resolve_repo_root(run_command, fallback_cwd)
   local repo = opts.repo or resolve_repo_slug(run_command)
   local commit_id = opts.commit_id or resolve_head_commit(run_command)
+  local session_auto_fallback = auto_fallback == true or opts.auto_fallback == true
 
   current_session = {
     diff_text = result.stdout,
@@ -1605,7 +1630,8 @@ function M.start(opts)
     panel_current_path = nil,
     threads_fetch_in_flight = false,
     threads = {},
-    mode = opts.mode,
+    auto_fallback = session_auto_fallback,
+    mode = opts.mode ~= nil and opts.mode or (auto_fallback == true and "local" or nil),
     range_start = opts.range_start,
     range_end = opts.range_end,
     review_commit_id = opts.review_commit_id,
@@ -1766,7 +1792,11 @@ function M.start(opts)
     defer_thread_refresh = type(uis) == "table" and #uis > 0
   end
 
-  if defer_thread_refresh == true then
+  if session_auto_fallback == true then
+    current_session.thread_state = {
+      state = "ok",
+    }
+  elseif defer_thread_refresh == true then
     current_session.thread_state = {
       state = "pending",
       message = "Thread panel refresh scheduled",
@@ -1839,6 +1869,8 @@ function M.start(opts)
     hunks = hunks,
     thread_state = current_session.thread_state and current_session.thread_state.state,
     thread_message = current_session.thread_state and current_session.thread_state.message,
+    auto_fallback = session_auto_fallback,
+    source = resolved_source,
   }
 end
 
@@ -2207,6 +2239,7 @@ function M.refresh(opts)
       worktree_path = current_session.worktree_path,
       worktree_owned = current_session.worktree_owned,
       reviewed_files = current_session.reviewed_files,
+      auto_fallback = current_session.auto_fallback,
     }
   end
 
